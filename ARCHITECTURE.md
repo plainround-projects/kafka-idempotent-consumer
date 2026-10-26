@@ -90,7 +90,7 @@ flowchart LR
 | **Eviction by slow polling** | `Consumer poll timeout has expired` and `EVICTED: offset commit failed (CommitFailedError)`, repeating; none with `--max-poll-records 50` | `make demo-evict` |
 | **A rebalance** | Each eviction and each join or leave moves partitions; uncommitted records are redelivered | `make demo-evict` shows it as repeated evictions and rejoins |
 
-The step-6 runbook entry is [RUNBOOK.md](RUNBOOK.md).
+The step-6 runbook entry is [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ## Limits of the teaching build against production
 

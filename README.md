@@ -7,7 +7,7 @@ A consumer that reads payment events from Kafka and keeps an account-balance tab
 | **Lesson** | `/prep/kafka/project-idempotent-consumer`, "Build a consumer that survives crashes and poison" (`data-structure-explainer/src/content/tracks/kafka/15-project-idempotent-consumer.md` in the Plainround app) |
 | **Planned hours** | 10 |
 | **Level** | Intermediate |
-| **Architecture** | [ARCHITECTURE.md](ARCHITECTURE.md), runbook: [RUNBOOK.md](RUNBOOK.md), decisions: [docs/adr](docs/adr) |
+| **Architecture** | [ARCHITECTURE.md](ARCHITECTURE.md), runbook: [docs/RUNBOOK.md](docs/RUNBOOK.md), decisions: [docs/adr](docs/adr) |
 
 ## Prerequisites
 
@@ -66,7 +66,7 @@ The migration is separate on purpose: the naive consumer of steps 1 and 2 does n
 | 3 | 20 runs with a crash at a random point all end with correct balances. | `make crash-test` | Twenty lines `run N/20 (kill at K): crashed, restarted, all 50 balances match expected totals exactly`, each at a different record number (the points are fixed and spread over the topic, so the run is repeatable), exit code 0. Each run uses a fresh consumer group, zeroed tables, a crash exit code of 1 and a clean restart. |
 | 4 | The consumer keeps processing after the bad event, and the dead-letter topic holds it with enough context to replay it. | `make demo-poison` | `dead-lettered payments[1]@1126: could not convert amount to a number: 'not-a-number'`; `done: {'applied': 10000, 'duplicate': 0, 'dead-lettered': 1, ...}`; balances match; the dead-letter record has `originalTopic`, `originalPartition`, `originalOffset`, `error`, `raw` and `rawBase64`; `LAG` is 0 on every partition of `payments`, so the offset moved past the bad record. |
 | 5 | You have seen the eviction caused by `max.poll.interval.ms` in your logs, and lowering `max.poll.records` or batching the writes stops it. | `make demo-evict` | With `--max-poll-records 500` and 100 ms per record: `Consumer poll timeout has expired. This means the time between subsequent calls to poll() was longer than the configured max_poll_interval_ms` followed by `EVICTED: offset commit failed (CommitFailedError)`, repeating about every 12 seconds. With `--max-poll-records 50`: no such line and `'evictions': 0`. (`max.poll.interval.ms` is set to 10 seconds for the demo so it shows in seconds; the default is 5 minutes.) Lowering `max.poll.records` is built; batching the writes is described in ARCHITECTURE.md but not built. |
-| 6 | The runbook entry fits on one page and each signal is something you can see in your metrics or logs. | read [RUNBOOK.md](RUNBOOK.md) | One table, four rows in incident order (lag, dead-letter count, balance check, process death), each row with a signal that this project prints or can query. |
+| 6 | The runbook entry fits on one page and each signal is something you can see in your metrics or logs. | read [docs/RUNBOOK.md](docs/RUNBOOK.md) | One table, four rows in incident order (lag, dead-letter count, balance check, process death), each row with a signal that this project prints or can query. |
 
 The same scenarios (crash, idempotent crash, poison, eviction) run as automated end-to-end tests in [tests/e2e](tests/e2e), and the adapters are tested in [tests/integration](tests/integration) (the two ledgers against PostgreSQL, the Kafka consumer, publisher and dead-letter sink, the health probes).
 
@@ -113,7 +113,7 @@ docs/adr/            decision records (event id in the same transaction, ports a
 docker-compose.yml   Kafka 4 (KRaft, one node) and PostgreSQL 18.      Dockerfile  the programs as an image.
 pyproject.toml       project metadata and every tool's configuration (ruff, mypy, pytest, import-linter).
 requirements*.lock   hash-pinned dependencies (runtime, and runtime plus development tools).
-RUNBOOK.md           the step-6 runbook entry.     Makefile  the only commands a reader needs (make help).
+docs/RUNBOOK.md      the step-6 runbook entry.      Makefile  the only commands a reader needs (make help).
 ```
 
 The dependency rule (domain depends on nothing; application on domain; infrastructure and interfaces on both; nothing on interfaces) is enforced by `make lint` through import-linter. A second contract forbids `domain` and `application` from importing `kafka` or `psycopg`.

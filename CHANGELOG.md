@@ -12,4 +12,4 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - A balance updater with a naive mode (steps 1 and 2) and an idempotent mode (step 3): event id and balance in one transaction, offsets committed after the database commit, a kill switch, dead-lettering of poison records and eviction handling.
 - A balance checker, a 20-run crash harness and a health command.
 - Layered package (`domain`, `application`, `infrastructure`, `interfaces`) with the dependency rule enforced by import-linter, unit, integration and end-to-end tests, ruff, mypy, hash-pinned lock files and a CI workflow.
-- `RUNBOOK.md`: the lesson's step-6 one-page entry.
+- `docs/RUNBOOK.md`: the lesson's step-6 one-page entry.
