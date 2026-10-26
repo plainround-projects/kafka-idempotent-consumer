@@ -84,10 +84,10 @@ flowchart LR
 | Failure | What you see | Reproduce |
 | --- | --- | --- |
 | **Naive consumer, no failures** (baseline) | `all 50 balances match expected totals exactly` | `make demo-baseline` |
-| **Crash between the database commit and the offset commit** | After restart one account is high by exactly one payment: `MISMATCH acct-047: expected 55191.64, got 55651.41 (off by +459.77)` | `make demo-crash` (kill switch at record 4731, `KILL_AT=...` to change) |
+| **Crash between the database commit and the offset commit** | After restart one account is high by exactly one payment: `MISMATCH acct-041: expected 48763.88, got 49095.92 (off by +332.04)` | `make demo-crash` (kill switch at record 4731, `KILL_AT=...` to change) |
 | **The same crash, idempotent** | Restart logs `'duplicate': N`, balances match | `make crash-test` (20 runs, each crashes at a different record, restarts, checks) |
-| **Poison message** | `dead-lettered payments[1]@1126: could not convert amount to a number: 'not-a-number'`; `payments-dlq` holds the record; lag 0 on every partition | `make demo-poison` |
-| **Eviction by slow polling** | `Consumer poll timeout has expired` and `EVICTED: offset commit failed (CommitFailedError)`, repeating; none with `--max-poll-records 50` | `make demo-evict` |
+| **Poison message** | a `dead-lettered` log line with `partition=1 offset=1058` and `error="could not convert amount to a number: 'not-a-number'"`; `payments-dlq` holds the record; lag 0 on every partition | `make demo-poison` |
+| **Eviction by slow polling** | `Consumer poll timeout has expired` and `EVICTED: offset commit rejected` with `error=CommitFailedError`, repeating; none with `--max-poll-records 50` | `make demo-evict` |
 | **A rebalance** | Each eviction and each join or leave moves partitions; uncommitted records are redelivered | `make demo-evict` shows it as repeated evictions and rejoins |
 
 The step-6 runbook entry is [docs/RUNBOOK.md](docs/RUNBOOK.md).
