@@ -109,11 +109,12 @@ tests/
   unit/              domain, application (with in-memory fakes), infrastructure helpers, CLI arguments. No services.
   integration/       the ledgers against PostgreSQL; the Kafka adapters against the broker.
   e2e/               the lesson's scenarios through the command-line programs.
-docs/adr/            decision records (event id in the same transaction, ports and adapters, the libraries).
+docs/                RUNBOOK.md (the step-6 runbook entry) and adr/ (decision records: event id in the same
+                     transaction, ports and adapters, the libraries).
 docker-compose.yml   Kafka 4 (KRaft, one node) and PostgreSQL 18.      Dockerfile  the programs as an image.
 pyproject.toml       project metadata and every tool's configuration (ruff, mypy, pytest, import-linter).
 requirements*.lock   hash-pinned dependencies (runtime, and runtime plus development tools).
-docs/RUNBOOK.md      the step-6 runbook entry.      Makefile  the only commands a reader needs (make help).
+Makefile             the only commands a reader needs (make help).
 ```
 
 The dependency rule (domain depends on nothing; application on domain; infrastructure and interfaces on both; nothing on interfaces) is enforced by `make lint` through import-linter. A second contract forbids `domain` and `application` from importing `kafka` or `psycopg`.
