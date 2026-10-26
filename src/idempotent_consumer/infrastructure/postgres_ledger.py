@@ -56,6 +56,8 @@ class IdempotentLedger:
 
 
 class PostgresBalanceReader:
+    """Reads balances from PostgreSQL. Implements `BalanceReader`."""
+
     def __init__(self, connection: psycopg.Connection[Any]) -> None:
         self._connection = connection
 
@@ -65,6 +67,8 @@ class PostgresBalanceReader:
 
 
 class PostgresLedgerAdmin:
+    """Zeroes balances and empties processed_events. Implements `LedgerAdmin`."""
+
     def __init__(self, connection: psycopg.Connection[Any]) -> None:
         self._connection = connection
 

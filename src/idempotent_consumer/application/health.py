@@ -14,6 +14,8 @@ class ProbeFailedError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ProbeResult:
+    """The outcome of one health probe."""
+
     name: str
     ok: bool
     detail: str
@@ -21,6 +23,8 @@ class ProbeResult:
 
 @dataclass(frozen=True, slots=True)
 class HealthReport:
+    """The outcomes of every probe; healthy only when all of them are."""
+
     results: tuple[ProbeResult, ...]
 
     @property
@@ -29,6 +33,7 @@ class HealthReport:
 
 
 def check_health(probes: Iterable[HealthProbe]) -> HealthReport:
+    """Run every probe and collect the outcomes; a failed probe is reported, not raised."""
     results = []
     for probe in probes:
         try:

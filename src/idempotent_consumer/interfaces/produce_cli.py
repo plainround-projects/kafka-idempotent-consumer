@@ -19,6 +19,7 @@ from .common import load_settings
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The argument parser of the producer program."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--payments", type=non_negative_int, default=10_000)
     parser.add_argument(
@@ -31,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Publish payments and write the expected totals; returns the process exit code."""
     args = build_parser().parse_args(argv)
     settings = load_settings()
     if settings is None:

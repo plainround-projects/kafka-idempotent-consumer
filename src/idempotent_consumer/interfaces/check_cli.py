@@ -14,6 +14,7 @@ from .common import load_settings
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Compare balances with the expected totals; returns 1 on any mismatch."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected", type=Path, default=Path("expected_totals.json"))
     args = parser.parse_args(argv)

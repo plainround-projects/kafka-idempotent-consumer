@@ -31,6 +31,8 @@ def _positive_int(environ: Mapping[str, str], name: str, default: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class KafkaSettings:
+    """The Kafka part of the configuration."""
+
     bootstrap_servers: str
     topic: str
     dlq_topic: str
@@ -41,6 +43,8 @@ class KafkaSettings:
 
 @dataclass(frozen=True, slots=True)
 class PostgresSettings:
+    """The PostgreSQL part of the configuration; the password is never printed."""
+
     host: str
     port: int
     database: str

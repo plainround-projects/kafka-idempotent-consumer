@@ -9,6 +9,8 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class DeadLetter:
+    """A record parked in the dead-letter topic, with where it came from and why."""
+
     original_topic: str
     original_partition: int
     original_offset: int

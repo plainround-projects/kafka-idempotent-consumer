@@ -22,6 +22,7 @@ from .common import load_settings
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the crash test; returns 1 when any run fails."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--runs", type=positive_int, default=20)
     parser.add_argument("--payments", type=positive_int, default=10_000, help="payments in the topic")

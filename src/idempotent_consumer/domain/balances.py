@@ -9,6 +9,8 @@ from decimal import Decimal
 
 @dataclass(frozen=True, slots=True)
 class Mismatch:
+    """An account whose balance differs from what it must be."""
+
     account_id: str
     expected: Decimal
     actual: Decimal
@@ -22,6 +24,7 @@ class Mismatch:
 
 
 def diff_balances(expected: Mapping[str, Decimal], actual: Mapping[str, Decimal]) -> list[Mismatch]:
+    """The accounts whose actual balance differs from the expected one, sorted by account id."""
     zero = Decimal("0")
     return [
         Mismatch(account, expected.get(account, zero), actual.get(account, zero))

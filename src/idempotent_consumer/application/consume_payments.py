@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ConsumePlan:
+    """How the consumer runs: commit interval, artificial work, and when to stop."""
+
     commit_every: int = 1  # 1 commits after every record, the lesson's shape
     work_delay_seconds: float = 0.0  # artificial work per record
     idle_timeout_seconds: float | None = None  # stop after this long without a record (after assignment)
@@ -37,6 +39,8 @@ class ConsumePlan:
 
 @dataclass
 class ConsumeCounts:
+    """What the consumer did: payments applied, skipped as duplicates, dead-lettered, and evictions."""
+
     applied: int = 0
     duplicate: int = 0
     dead_lettered: int = 0

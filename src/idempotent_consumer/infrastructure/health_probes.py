@@ -14,6 +14,8 @@ from .settings import KafkaSettings, PostgresSettings
 
 
 class KafkaTopicsProbe:
+    """Health probe: the broker answers and the payments topics exist."""
+
     name = "kafka"
 
     def __init__(self, settings: KafkaSettings) -> None:
@@ -41,6 +43,8 @@ class KafkaTopicsProbe:
 
 
 class PostgresSchemaProbe:
+    """Health probe: PostgreSQL answers and the balances table exists."""
+
     name = "postgres"
 
     def __init__(self, settings: PostgresSettings) -> None:

@@ -8,6 +8,8 @@ from types import FrameType
 
 
 class ShutdownSignal:
+    """A flag that SIGINT and SIGTERM set, which work loops check between units of work."""
+
     def __init__(self) -> None:
         self._requested = threading.Event()
 

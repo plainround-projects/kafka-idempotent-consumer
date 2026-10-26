@@ -17,6 +17,8 @@ class CommitRejectedError(Exception):
 
 
 class Outcome(StrEnum):
+    """What happened to one payment."""
+
     APPLIED = "applied"
     DUPLICATE = "duplicate"
     DEAD_LETTERED = "dead-lettered"
@@ -34,6 +36,8 @@ class Delivery:
 
 
 class PaymentSource(Protocol):
+    """Reads payment records from the log as a member of a consumer group."""
+
     def poll(self, timeout_seconds: float) -> Sequence[Delivery]:
         """Return the next records, or an empty sequence when none arrived in time."""
 
@@ -45,6 +49,8 @@ class PaymentSource(Protocol):
 
 
 class OffsetCommitter(Protocol):
+    """Commits consumer offsets to the group."""
+
     def commit(self, next_offsets: Mapping[tuple[str, int], int]) -> None:
         """Commit, per (topic, partition), the offset of the next record to read.
 
@@ -53,11 +59,15 @@ class OffsetCommitter(Protocol):
 
 
 class DeadLetterSink(Protocol):
+    """Parks records that can never be processed."""
+
     def send(self, letter: DeadLetter) -> None:
         """Park an unprocessable record. Returns only once it is safely stored."""
 
 
 class BalanceLedger(Protocol):
+    """Applies payments to account balances."""
+
     def apply(self, payment: Payment, delivery: Delivery) -> Outcome:
         """Add the payment to its account in one database transaction.
 
@@ -67,21 +77,29 @@ class BalanceLedger(Protocol):
 
 
 class BalanceReader(Protocol):
+    """Reads every account's balance."""
+
     def read_balances(self) -> Mapping[str, Decimal]:
         """Every account's balance."""
 
 
 class LedgerAdmin(Protocol):
+    """Resets the ledger between experiments."""
+
     def reset(self) -> None:
         """Zero every balance and forget every processed event."""
 
 
 class ConsumerRunner(Protocol):
+    """Runs the idempotent consumer as a separate process."""
+
     def run(self, group_id: str, kill_at: int | None, commit_every: int) -> int:
         """Run one idempotent consumer process to its end and return its exit code."""
 
 
 class HealthProbe(Protocol):
+    """A dependency check that reports a short detail or fails with ProbeFailedError."""
+
     name: str
 
     def check(self) -> str:

@@ -14,6 +14,8 @@ from .ports import BalanceReader, ConsumerRunner, LedgerAdmin
 
 @dataclass(frozen=True, slots=True)
 class CrashRun:
+    """The result of one crash-and-restart run."""
+
     number: int
     kill_at: int
     crash_exit_code: int

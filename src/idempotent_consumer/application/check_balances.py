@@ -10,4 +10,5 @@ from .ports import BalanceReader
 
 
 def check_balances(reader: BalanceReader, expected: Mapping[str, Decimal]) -> list[Mismatch]:
+    """The accounts whose balance differs from the expected total."""
     return diff_balances(expected, reader.read_balances())

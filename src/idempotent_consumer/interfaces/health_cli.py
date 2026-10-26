@@ -13,6 +13,7 @@ from .common import load_settings
 
 
 def main(_argv: Sequence[str] | None = None) -> int:
+    """Check Kafka and PostgreSQL; returns 0 when healthy."""
     settings = load_settings()
     if settings is None:
         return 2

@@ -68,6 +68,7 @@ def parse_payment(raw: bytes) -> Payment:
 
 
 def parse_amount(value: object) -> Decimal:
+    """Validate a payment amount: a positive number with at most two decimals."""
     if isinstance(value, bool) or value is None:
         raise PoisonMessageError(f"amount is not a number: {value!r}")
     try:

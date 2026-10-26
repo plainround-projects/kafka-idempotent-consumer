@@ -15,6 +15,8 @@ def _quote(value: object) -> str:
 
 
 class LogfmtFormatter(logging.Formatter):
+    """Format a log record as one logfmt line, with the record's extra fields as key=value pairs."""
+
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
         parts = [

@@ -22,6 +22,7 @@ from .common import load_settings
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """The argument parser of the consumer program."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--mode", choices=["naive", "idempotent"], default="idempotent")
     parser.add_argument("--group", default=None, help="defaults to $GROUP_ID")
@@ -63,6 +64,7 @@ def kill_switch(kill_at: int, name: str) -> Callable[[int], None]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the balance updater; returns the process exit code."""
     args = build_parser().parse_args(argv)
     settings = load_settings()
     if settings is None:
