@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kafka-idempotent-consumer"
+version = "0.1.0"
+description = "A Kafka consumer that keeps PostgreSQL balances correct under at-least-once delivery: idempotence, dead letters, evictions."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Sumit Srivastava" }]
+dependencies = ["kafka-python==3.0.12", "psycopg[binary]>=3.2,<4"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+    "pip-audit>=2.7",
+]
+
+[project.scripts]
+idempotent-consumer-produce = "idempotent_consumer.interfaces.produce_cli:main"
+idempotent-consumer-consume = "idempotent_consumer.interfaces.consume_cli:main"
+idempotent-consumer-check = "idempotent_consumer.interfaces.check_cli:main"
+idempotent-consumer-crash-test = "idempotent_consumer.interfaces.crash_test_cli:main"
+idempotent-consumer-health = "idempotent_consumer.interfaces.health_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "C4", "RUF", "PT"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["kafka", "kafka.*"]
+ignore_missing_imports = true
+
+# Test functions are named for the behavior they check; annotating every one adds noise, not safety.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs Kafka and PostgreSQL from docker-compose.yml (make up)",
+    "e2e: runs the lesson's scenarios through the command-line programs against Kafka and PostgreSQL",
+]
+
+[tool.coverage.run]
+source = ["idempotent_consumer"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.importlinter]
+root_package = "idempotent_consumer"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers: interfaces -> infrastructure -> application -> domain, never upward"
+type = "layers"
+layers = [
+    "idempotent_consumer.interfaces",
+    "idempotent_consumer.infrastructure",
+    "idempotent_consumer.application",
+    "idempotent_consumer.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and application know nothing about Kafka or PostgreSQL"
+type = "forbidden"
+source_modules = ["idempotent_consumer.domain", "idempotent_consumer.application"]
+forbidden_modules = ["kafka", "psycopg"]
