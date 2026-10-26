@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..domain.dead_letter import DeadLetter
 from ..domain.payments import Payment
@@ -33,6 +33,23 @@ class Delivery:
     offset: int
     key: bytes | None
     value: bytes
+
+
+class PaymentPublisher(Protocol):
+    """Sends payment payloads (well-formed or deliberately malformed) to the log."""
+
+    def publish(self, payload: Mapping[str, Any]) -> None:
+        """Send one payload, keyed by its account id."""
+
+    def flush(self) -> None:
+        """Block until every published payload is acknowledged."""
+
+
+class ExpectedTotalsStore(Protocol):
+    """Where the producer leaves the answer the checker compares the balances with."""
+
+    def save(self, totals: Mapping[str, Decimal]) -> None:
+        """Store the expected total of every account."""
 
 
 class PaymentSource(Protocol):

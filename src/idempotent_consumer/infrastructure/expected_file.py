@@ -16,3 +16,15 @@ def save_expected(path: Path, totals: Mapping[str, Decimal]) -> None:
 def load_expected(path: Path) -> dict[str, Decimal]:
     """Read the expected totals written by `save_expected`."""
     return {account: Decimal(total) for account, total in json.loads(path.read_text()).items()}
+
+
+class JsonExpectedStore:
+    """Implements `ExpectedTotalsStore` with a JSON file."""
+
+    def __init__(self, path: Path) -> None:
+        """Remember where to write."""
+        self._path = path
+
+    def save(self, totals: Mapping[str, Decimal]) -> None:
+        """Write the totals to the file."""
+        save_expected(self._path, totals)

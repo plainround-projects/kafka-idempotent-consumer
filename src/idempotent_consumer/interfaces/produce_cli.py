@@ -11,9 +11,10 @@ import random
 from collections.abc import Sequence
 from pathlib import Path
 
-from ..domain.payments import build_payments, expected_totals, with_poison
-from ..infrastructure.expected_file import save_expected
+from ..application.produce_payments import ProducePlan, produce_payments
+from ..infrastructure.expected_file import JsonExpectedStore
 from ..infrastructure.kafka_producers import KafkaPaymentPublisher
+from ..infrastructure.shutdown import ShutdownSignal
 from .arguments import non_negative_int
 from .common import load_settings
 
@@ -37,22 +38,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = load_settings()
     if settings is None:
         return 2
-    rng = random.Random(args.seed)
-    payments = build_payments(args.payments, rng)
-    payloads = with_poison([payment.payload() for payment in payments], args.poison, rng)
+    shutdown = ShutdownSignal()
+    shutdown.install()
     publisher = KafkaPaymentPublisher(settings.kafka, args.topic)
     try:
-        for payload in payloads:
-            publisher.publish(payload)
-        publisher.flush()
+        result = produce_payments(
+            publisher,
+            JsonExpectedStore(args.expected),
+            ProducePlan(args.payments, args.poison),
+            random.Random(args.seed),
+            stop=lambda: shutdown.requested,
+        )
     finally:
         publisher.close()
-    if payments:
-        save_expected(args.expected, expected_totals(payments))
+    if result.payments and not result.stopped:
         print(f"wrote {args.expected} (the expected total of each of the 50 accounts)")
-    print(
-        f"produced {len(payments)} payments and {args.poison} malformed events to {args.topic or settings.kafka.topic}"
-    )
+    note = " (stopped early)" if result.stopped else ""
+    topic = args.topic or settings.kafka.topic
+    print(f"produced {result.payments} payments and {result.poison} malformed events to {topic}{note}")
     return 0
 
 
