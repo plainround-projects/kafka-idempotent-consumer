@@ -96,7 +96,7 @@ Only what the lesson scopes out, plus where this build differs from the lesson's
 src/idempotent_consumer/
   domain/            payments and their validation, dead letters, balance comparison, kill points,
                      named errors. Depends on nothing outside the standard library.
-  application/       use cases (consume payments, check balances, crash test, health) and the ports
+  application/       use cases (produce payments, consume payments, check balances, crash test, health) and the ports
                      they need (PaymentSource, OffsetCommitter, DeadLetterSink, BalanceLedger, ...).
                      Depends on domain only.
   infrastructure/    adapters: kafka-python consumer, publisher and dead-letter sink; psycopg
