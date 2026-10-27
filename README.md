@@ -8,6 +8,7 @@ A consumer that reads payment events from Kafka and keeps an account-balance tab
 | **Planned hours** | 10 |
 | **Level** | Intermediate |
 | **Architecture** | [ARCHITECTURE.md](ARCHITECTURE.md), runbook: [docs/RUNBOOK.md](docs/RUNBOOK.md), decisions: [docs/adr](docs/adr) |
+| **Technology notes** | [tech/README.md](tech/README.md): one file per technology used here, written for a reader who knows none of them |
 
 ## Prerequisites
 
