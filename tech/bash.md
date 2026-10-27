@@ -71,7 +71,7 @@ demo-evict: data migrate ## step 5: slow batches get the consumer evicted; small
 1. `bash -c '[ -f Makefile ] && echo yes || echo no'` prints `yes`; with a missing file name it prints `no`.
 2. `for f in sql/migrations/*.sql; do echo "applying $f"; done` prints `applying sql/migrations/001_processed_events.sql`.
 3. `bash -c 'false || echo recovered; true && echo ok'` prints `recovered` then `ok`.
-4. `make -n demo-crash` prints the whole joined command without running it.
+4. `make -n demo-crash | tail -6` prints, without running anything, the joined crash command: the lines starting `group=crash-$(date +%s); \`, the two consumers, `echo "crash exit code: $?"` and the checker.
 5. `printf 'a EVICTED\nb ok\n' | grep -E "EVICTED|poll timeout"` prints only `a EVICTED`.
 
 ## Mistakes people make

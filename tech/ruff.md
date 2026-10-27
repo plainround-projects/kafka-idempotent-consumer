@@ -27,6 +27,8 @@ The template asks for a formatter and a linter configured in the repository and 
 line-length = 120
 target-version = "py312"
 src = ["src", "tests"]
+# tech/ quotes parts of files exactly as they are, so its code blocks are not reformatted.
+extend-exclude = ["tech"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "N", "C4", "RUF", "PT", "D100", "D101", "D103", "D104"]
