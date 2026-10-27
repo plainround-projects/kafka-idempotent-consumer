@@ -20,11 +20,28 @@ On `push` or `pull_request`, GitHub reserves an Ubuntu virtual machine for each 
 
 ## Walkthrough of this repository's use
 
+The file `.github/workflows/ci.yml` is read below in full, line by line. First the words:
+
+- A **workflow** is one automation described in one YAML file under `.github/workflows/`. GitHub starts it when something happens (an **event**).
+- A **job** is a group of steps that runs on one fresh machine. Jobs in one workflow run at the same time unless one says it must wait for another.
+- A **runner** is the machine a job runs on. GitHub provides a fresh virtual machine for each job; it is thrown away when the job ends, so nothing from a previous run is left over.
+- A **step** is one thing the job does: either a **action** (reusable code someone published, named with `uses:`) or a shell command (`run:`).
+- A **service container** is a Docker container that GitHub starts next to the job, for the job to talk to (here a Kafka broker and a PostgreSQL server).
+
+### Name and trigger
+
 ```yaml
 name: ci
 
 on: [push, pull_request]
+```
 
+- Line 1: `name: ci` is the label shown in GitHub's list of runs.
+- Line 3: `on: [push, pull_request]` lists the events that start the workflow: every `push` (someone uploads commits to the repository) and every `pull_request` (someone proposes a change). The square brackets make a YAML list. See `tech/yaml.md` for YAML.
+
+### Job 1: `check`
+
+```yaml
 jobs:
   check:
     name: Format, lint, types, import rules, unit tests with coverage, dependency audit
@@ -38,11 +55,15 @@ jobs:
       - run: make audit
 ```
 
-- `name: ci` and `on: [push, pull_request]`: the workflow's name and its triggers.
-- `jobs:` / `check:`: the first job. `runs-on: ubuntu-latest` picks the machine type.
-- `uses: actions/checkout@v4`: run a ready-made step (an **action**) that downloads the repository. `@v4` pins its major version.
-- `uses: actions/setup-python@v5` with `python-version: "3.12"`: installs Python 3.12. `with:` passes the action's inputs.
-- `run: make check`: run a shell command. `make check` is lint plus unit tests with coverage. `make audit` checks the locked dependencies for known security problems.
+- Line 5: `jobs:` begins the table of jobs. Line 6: this job's identifier, `check`. Line 7: `name:` is the longer text shown in the interface.
+- Line 8: `runs-on: ubuntu-latest` chooses a virtual machine running the newest Ubuntu Linux that GitHub offers.
+- Line 9: `steps:` begins the list; each item starts with `-`.
+- Line 10: `uses: actions/checkout@v4` runs the published action `checkout`, version 4, which copies this repository's files onto the runner. Without it the machine would have an empty folder.
+- Lines 11 to 13: `uses: actions/setup-python@v5` installs Python; `with:` passes it inputs, here `python-version: "3.12"`. The version is in quotes because `3.12` unquoted would be read as a number, and the trailing zero of something like `3.10` would be lost.
+- Line 14: `run: make check` runs the shell command. It builds the virtual environment from the lock file and then runs the formatter check, the linter, mypy, the import rules, and the unit tests with the 95% coverage minimum.
+- Line 15: `run: make audit` runs `pip-audit` on the locked packages. A step fails the job when its command exits non-zero, and a failed step stops the later ones.
+
+### Job 2: `integration`
 
 ```yaml
   integration:
@@ -53,6 +74,14 @@ jobs:
         image: apache/kafka:4.0.0
         ports:
           - 9092:9092
+```
+
+- Lines 17 to 19: the identifier, the name and the runner, as above. This job does not say `needs:`, so it runs at the same time as `check`.
+- Line 20: `services:` starts the list of service containers. Line 21: `kafka:` names this one.
+- Line 22: `image: apache/kafka:4.0.0` is the Docker image to start: the official Apache Kafka, version 4.0.0.
+- Lines 23 and 24: `ports: - 9092:9092` connects port 9092 of the runner machine to port 9092 inside the container (`host:container`). Because of this, the tests on the runner can connect to `localhost:9092`.
+
+```yaml
         env:
           KAFKA_NODE_ID: 1
           KAFKA_PROCESS_ROLES: broker,controller
@@ -65,12 +94,30 @@ jobs:
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+```
+
+`env:` sets **environment variables** inside the container. The Kafka image reads variables that start with `KAFKA_` and turns each into a broker setting (`KAFKA_NODE_ID` becomes `node.id`, `KAFKA_PROCESS_ROLES` becomes `process.roles`). They are the same as in `docker-compose.yml`; each is explained in `tech/docker-compose.md`, and in short:
+
+- `KAFKA_NODE_ID: 1` names this server's id in the cluster.
+- `KAFKA_PROCESS_ROLES: broker,controller`: one process does both jobs, serving clients (broker) and managing cluster metadata (controller).
+- `KAFKA_LISTENERS`: the ports it listens on: 9092 for clients, 9093 for controller traffic.
+- `KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092`: the address it tells clients to use afterwards. Here it is `localhost:9092`, which works because the tests run on the same machine as the published port.
+- `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`, `KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093`, `KAFKA_CONTROLLER_LISTENER_NAMES`: how each listener is secured (here: not at all, `PLAINTEXT`), who votes for the controller (node 1 at port 9093), and which listener is the controller's.
+- `KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR`, `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR`, `KAFKA_TRANSACTION_STATE_LOG_MIN_ISR`: set to 1 because there is one broker and Kafka's own internal topics cannot have more copies than brokers.
+- `KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0`: do not wait three seconds for more group members before the first rebalance, so tests start faster.
+
+```yaml
         options: >-
           --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
           --health-interval 5s
           --health-timeout 10s
           --health-retries 20
           --health-start-period 10s
+```
+
+- Lines 37 to 42: `options: >-` passes extra command-line options to `docker create`. The `>-` is a YAML **folded block scalar**: the indented lines are joined into one line with spaces and no trailing newline. The options set a **health check**: Docker runs `kafka-broker-api-versions.sh --bootstrap-server localhost:9092` inside the container (it succeeds only when the broker answers) every 5 seconds (`--health-interval`), allowing 10 seconds per try (`--health-timeout`), up to 20 failed tries (`--health-retries`) and ignoring failures during the first 10 seconds (`--health-start-period`). GitHub waits until the service is healthy before it starts the job's steps.
+
+```yaml
       postgres:
         image: postgres:18
         ports:
@@ -84,6 +131,13 @@ jobs:
           --health-interval 3s
           --health-timeout 5s
           --health-retries 20
+```
+
+- Lines 43 to 46: the second service container, `postgres`, from the image `postgres:18`. `5433:5432` publishes the container's port 5432 on the runner's port 5433, which is where the settings expect it.
+- Lines 47 to 50: its environment: the user and database `bank` and the password `ci-only-throwaway`. This password is a throwaway value for a database that exists only for the minutes of the run and is deleted with the runner; it protects nothing. It is not a secret and nothing else uses it.
+- Lines 51 to 55: its health check, `pg_isready -U bank -d bank` (PostgreSQL's own readiness tool), every 3 seconds, 5 seconds per try, 20 retries.
+
+```yaml
     env:
       POSTGRES_PASSWORD: ci-only-throwaway
     steps:
@@ -94,10 +148,13 @@ jobs:
       - run: make test-integration test-e2e
 ```
 
-- `services:` starts two containers before the steps: `kafka` and `postgres`. `image`, `ports` and `env` mirror `docker-compose.yml` (`tech/docker-compose.md`). The values under `env:` are the broker's settings.
-- `options: >-` passes Docker flags; the `--health-*` flags make GitHub wait until the broker answers (`tech/yaml.md` explains `>-`).
-- `postgres:` is the database (`image: postgres:18`, host port 5433, a throwaway password for the CI machine only). The job-level `env: POSTGRES_PASSWORD: ci-only-throwaway` hands the same value to the tests, which read it from the environment like any other setting.
-- The final step runs the integration and end-to-end tests against both services.
+- Lines 56 and 57: `env:` at the job level sets an environment variable for every step: `POSTGRES_PASSWORD`. The tests read the database password from the environment only (the code has no default), and this line supplies it. All other settings use their defaults, which match the ports published above.
+- Lines 58 to 62: the checkout and Python steps, as in the first job.
+- Line 63: `run: make test-integration test-e2e` runs the adapter tests and then the end-to-end tests against both service containers.
+
+### What this workflow does not do
+
+It does not publish anything or log in anywhere, so it needs no repository secrets; the only password in the file is the throwaway one for the temporary database. A failed run shows a red mark on the commit or pull request.
 
 ## Try it yourself
 

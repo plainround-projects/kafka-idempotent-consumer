@@ -22,17 +22,44 @@ The programs here normally run from your own Python virtual environment. The Doc
 
 ## Walkthrough of this repository's use
 
+The whole `Dockerfile` and the whole `.dockerignore` are read below. Ideas first:
+
+- An **image** is a read-only package holding a small operating system's files plus your program. A **container** is an image that is running.
+- Building an image runs the instructions in order. Each instruction that changes files produces a **layer**, a saved set of file changes. Docker keeps layers in a **cache**: if an instruction and everything before it are unchanged, Docker reuses the saved layer instead of running it again. So instructions that rarely change go first and instructions that change often go last.
+- A **tag** (`python:3.12.8-slim-bookworm`) is a movable label on an image. A **digest** (`@sha256:...`) is a fingerprint computed from the image's content; it cannot be moved.
+- **root** is the all-powerful user on Linux. A program that runs as root inside a container is more dangerous if someone breaks into it than one running as an ordinary user.
+
+### The comment and the base image
+
 ```dockerfile
 # The command-line programs as an image. Nothing here serves traffic; the health command is the image's check.
 # Run against Kafka and PostgreSQL the container can reach, for example:
 #   docker run --rm --network host -e BOOTSTRAP_SERVERS=localhost:9092 kafka-idempotent-consumer:dev idempotent-consumer-produce --payments 10
 FROM python:3.12.8-slim-bookworm@sha256:2199a62885a12290dc9c5be3ca0681d367576ab7bf037da120e564723292a2f0
+```
 
+- Lines 1 to 3: comments. They state that the image is not a server; its health command is the image's own check. Line 3 is an example of how to run it: `docker run --rm --network host -e BOOTSTRAP_SERVERS=localhost:9092 kafka-idempotent-consumer:dev idempotent-consumer-produce --payments 10`. In that command `--rm` deletes the container when it ends, `--network host` lets it use the host's network so `localhost:9092` is the real broker, `-e NAME=value` sets an environment variable, `kafka-idempotent-consumer:dev` is the image built by `make docker-build`, and everything after it replaces the default command, here `idempotent-consumer-produce --payments 10`. (The programs also need `POSTGRES_PASSWORD` and, unless the defaults apply, the other settings; pass each with `-e NAME=value`.)
+- Line 4: `FROM python:3.12.8-slim-bookworm@sha256:...`. Every image starts `FROM` another. This one is the official Python image, version 3.12.8, built on "bookworm", which is the name of Debian Linux 12, in its "slim" form (fewer extra programs). The long `@sha256:` part pins the exact image content, so a build today and a build in a year use the same base even if the tag has been moved.
+
+### Settings through the environment
+
+```dockerfile
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+```
 
+`ENV` sets environment variables for the rest of the build and for the running container. A backslash at the end of a line continues the instruction on the next line.
+
+- `PYTHONDONTWRITEBYTECODE=1`: Python normally saves a compiled copy of each module as a `.pyc` file; in a container that is wasted space.
+- `PYTHONUNBUFFERED=1`: Python sends output at once instead of holding it in a buffer, so `docker logs` shows lines as they are written.
+- `PIP_NO_CACHE_DIR=1`: pip keeps no download cache, which keeps the image small.
+- `PIP_DISABLE_PIP_VERSION_CHECK=1`: pip does not call the internet to ask if a newer pip exists.
+
+### Dependencies, then code
+
+```dockerfile
 WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --require-hashes -r requirements.lock
@@ -40,22 +67,53 @@ RUN pip install --require-hashes -r requirements.lock
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-deps .
+```
 
+- Line 11: `WORKDIR /app` sets the current folder for all later instructions and creates it.
+- Line 12: `COPY requirements.lock ./` copies that one file from the build folder on your machine into `/app`.
+- Line 13: `RUN pip install --require-hashes -r requirements.lock` runs a command during the build. It installs the runtime dependencies (`kafka-python` and `psycopg`) and refuses any file whose hash differs from the lock file. Because the layer depends only on `requirements.lock`, Docker reuses it from the cache whenever only the source code changed.
+- Line 15: `COPY pyproject.toml README.md ./`. Both are needed to install the project: `pyproject.toml` describes it and names `README.md` as its readme.
+- Line 16: `COPY src ./src` copies the code.
+- Line 17: `RUN pip install --no-deps .` installs the project itself. `--no-deps` because the dependencies are already installed. This is where the commands `idempotent-consumer-produce`, `-consume`, `-check`, `-crash-test` and `-health` (from `[project.scripts]`) get created on the image's search path.
+
+### Not running as root
+
+```dockerfile
 RUN useradd --system --uid 10001 --no-create-home app
 USER app
+```
 
+- Line 19: `useradd --system --uid 10001 --no-create-home app` creates a **system user** called `app` with the fixed number 10001 and no home folder. A high fixed number is a convention: it will not match a real person's account on the host.
+- Line 20: `USER app` makes every later instruction, and the container itself, run as that user.
+
+### The health check and the default command
+
+```dockerfile
 HEALTHCHECK --interval=30s --timeout=20s --retries=3 CMD ["idempotent-consumer-health"]
 CMD ["idempotent-consumer-health"]
 ```
 
-- `FROM python:3.12.8-slim-bookworm@sha256:...`: start from an image that already has Python 3.12.8 on a small Debian 12 ("bookworm") system. The part after `@` is a **digest**, a fingerprint of the exact bytes. Tags can be re-pointed; a digest cannot, so the build is repeatable.
-- `ENV ...`: set environment variables for every later step and for the running container. `PYTHONDONTWRITEBYTECODE=1` stops Python writing `.pyc` cache files. `PYTHONUNBUFFERED=1` makes output appear immediately. `PIP_NO_CACHE_DIR=1` skips pip's download cache, which keeps the image small. `PIP_DISABLE_PIP_VERSION_CHECK=1` silences pip's "new version available" call.
-- `WORKDIR /app`: later instructions run in `/app` (created if missing).
-- `COPY requirements.lock ./` then `RUN pip install --require-hashes -r requirements.lock`: copy only the lock file and install from it first. Because this layer depends only on that file, Docker reuses it when only the source code changes. `--require-hashes` makes pip refuse any package whose fingerprint is not in the file.
-- `COPY pyproject.toml README.md ./`, `COPY src ./src`, `RUN pip install --no-deps .`: copy the project and install it; `--no-deps` because the dependencies were installed already.
-- `RUN useradd --system --uid 10001 --no-create-home app` and `USER app`: create an unprivileged user and run as it. If the program were compromised, it would not be root inside the container.
-- `HEALTHCHECK ... CMD ["idempotent-consumer-health"]`: every 30 seconds Docker runs this command; exit code 0 means healthy. The square-bracket form is the **exec form**: the command runs directly, not through a shell.
-- `CMD ["idempotent-consumer-health"]`: the default command when you run the image without one.
+- Line 22: `HEALTHCHECK --interval=30s --timeout=20s --retries=3 CMD ["idempotent-consumer-health"]`. Docker runs that command inside the container every 30 seconds. Exit code 0 means healthy; 1 means unhealthy; after three failures in a row the container is marked unhealthy. The health command checks that Kafka has the two topics and that PostgreSQL has the `balances` table, so the container needs the connection settings (including `POSTGRES_PASSWORD`) in its environment to report healthy. The square-bracket form is the **exec form**: the program is started directly, without a shell in between.
+- Line 23: `CMD ["idempotent-consumer-health"]` is the command that runs if you start the image without giving one. A command given on the `docker run` line replaces it.
+
+### `.dockerignore`
+
+```text
+.git
+.venv
+logs
+tests
+docs
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+.env
+tech
+```
+
+When you build, Docker sends the **build context** (the folder given at the end of the command, here `.`) to the Docker engine. `.dockerignore` lists what is left out of it, in the same style as `.gitignore`: `.git` (the history), `.venv`, `logs`, `tests`, `docs`, `tech`, the caches of Python and of each tool, `.coverage` and `.env`. `**/__pycache__` means a folder of that name at any depth. Leaving these out keeps the build fast and the image small, and `.env` is excluded so that a file holding local settings or secrets can never be copied into an image by accident.
 
 ## Try it yourself
 

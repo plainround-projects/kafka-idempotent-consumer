@@ -25,7 +25,18 @@ You send a statement as text to the database server. The server parses it, plans
 
 ## Walkthrough of this repository's use
 
-### The balances table
+Five SQL files are read below, every line. First the ideas they rest on.
+
+- A **relational database** stores data in **tables**. A table has named **columns** (each with a **type**, such as text or number) and holds **rows** (one record each). Think of a spreadsheet with strict column types.
+- A **statement** is one instruction, ended by a semicolon. A line that starts with `--` is a **comment**: the database ignores it.
+- **DDL** (data definition language) statements create or change the structure (`CREATE TABLE`). **DML** (data manipulation language) statements work on the data (`INSERT`, `UPDATE`, `SELECT`, `TRUNCATE`).
+- A **primary key** is a column (or set of columns) whose value must be unique in every row. The database refuses a second row with the same key. It is also indexed, so lookups by key are fast.
+- **NULL** means "no value". `NOT NULL` on a column forbids it. A **default** is the value used when an insert does not give one.
+- A **transaction** is a group of statements that either all take effect or none does. The database keeps other sessions from seeing a half-done transaction.
+
+The run order, as the comment in the first file says: `001_schema.sql`, `002_seed.sql`, then the files in `migrations/` (`make db`, then `make migrate`). `003_queries.sql` and `reset.sql` are run on demand.
+
+### `sql/001_schema.sql`: the balances table
 
 ```sql
 -- DDL: the account-balance table the consumer keeps up to date.
@@ -42,13 +53,15 @@ COMMENT ON TABLE balances IS 'One row per account; total is the sum of every pay
 COMMENT ON COLUMN balances.total IS 'Running total in currency units, two decimals.';
 ```
 
-- `CREATE TABLE IF NOT EXISTS` makes the statement safe to run twice.
-- `account_id text PRIMARY KEY`: text, unique, never empty. One row per account.
-- `total numeric(14,2) NOT NULL DEFAULT 0`: `numeric(14,2)` is an exact decimal with up to 14 digits, two after the point. Floating-point numbers cannot store 0.1 exactly; money must use an exact type. `NOT NULL` forbids "no value". `DEFAULT 0` fills in zero when an insert gives none.
-- `updated_at timestamptz ... DEFAULT now()`: a time with a time zone, set to the current time when the row is created.
-- `COMMENT ON ...` attaches a description stored in the database.
+- Lines 1 and 2: comments. "DDL" is stated, and the run order.
+- Line 4: `CREATE TABLE IF NOT EXISTS balances (` creates a table named `balances`; `IF NOT EXISTS` makes the statement do nothing when the table is already there, so it is safe to run twice.
+- Line 5: `account_id text PRIMARY KEY`: a column of type `text` (any length) that is the primary key: one row per account, no repeats, never NULL.
+- Lines 6 and 7: the comment says why `total` is `numeric` and never a floating-point type: a running total of currency must not drift. `total numeric(14,2) NOT NULL DEFAULT 0`: `numeric(14,2)` is an exact decimal number with up to 14 digits, 2 of them after the decimal point (so up to 999,999,999,999.99). Floating-point numbers cannot store 0.1 exactly; `numeric` can. `NOT NULL` forbids a missing total and `DEFAULT 0` fills in 0 when a row is created without one.
+- Line 8: `updated_at timestamptz NOT NULL DEFAULT now()`: `timestamptz` is a date and time **with time zone**; `now()` is the function that returns the current time, so a new row is stamped when created. The consumer's update sets it again each time a payment is applied.
+- Line 9: `);` closes the column list and ends the statement.
+- Lines 11 and 12: `COMMENT ON TABLE balances IS '...'` and `COMMENT ON COLUMN balances.total IS '...'` store a description inside the database itself, visible with `\d+ balances` in `psql`. Text in SQL is written in single quotes.
 
-### Seeding with a generated series
+### `sql/002_seed.sql`: the 50 accounts
 
 ```sql
 -- DML: the 50 accounts the lesson's producer pays into (acct-001 ... acct-050), each starting at zero.
@@ -61,9 +74,14 @@ FROM generate_series(1, 50) AS n
 ON CONFLICT (account_id) DO NOTHING;
 ```
 
-`generate_series(1, 50)` produces the numbers 1 to 50 as rows. `lpad(n::text, 3, '0')` turns the number into text (`::text` is a cast) padded with zeros on the left to three characters, and `'acct-' || ...` joins text (`||` is concatenation). So the rows are `acct-001` to `acct-050`, each with total 0. `ON CONFLICT (account_id) DO NOTHING` means "if the key already exists, skip this row", so running the seed twice is harmless.
+**Seeding** means inserting the starting rows. The consumer's `UPDATE` needs a row to match (an update of a missing account changes nothing, and the code treats that as a poison message), so every account must exist before any event is read.
 
-### The migration: the idempotence guard
+- Line 5: `INSERT INTO balances (account_id, total)` says: insert rows, giving values for these two columns (the others use their defaults).
+- Line 6: `SELECT 'acct-' || lpad(n::text, 3, '0'), 0` produces the rows to insert. `||` joins text. `n::text` is a **cast**: it turns the number `n` into text. `lpad(text, 3, '0')` pads the text on the left with `0` to a length of 3, so 7 becomes `007`. The second value, `0`, is the starting total.
+- Line 7: `FROM generate_series(1, 50) AS n`: `generate_series(1, 50)` is a function that produces the numbers 1 to 50 as 50 rows; `AS n` names the column `n`. So 50 rows come out: `acct-001, 0` to `acct-050, 0`.
+- Line 8: `ON CONFLICT (account_id) DO NOTHING;`: if a row with that account id already exists (a primary-key clash), skip it silently instead of failing. The comment on line 3 says what it buys: it is safe to run twice, existing balances are left alone.
+
+### `sql/migrations/001_processed_events.sql`: the idempotence guard
 
 ```sql
 -- Migration for lesson step 3, "make processing idempotent".
@@ -82,22 +100,16 @@ CREATE TABLE IF NOT EXISTS processed_events (
 COMMENT ON TABLE processed_events IS 'Idempotence guard: one row per event whose amount has been applied to balances.';
 ```
 
-A **migration** is a script that changes an existing database's shape. Here it adds one table. `event_id uuid PRIMARY KEY` is the heart of the lesson: a `uuid` is a 128-bit unique id, and as a primary key it can exist only once. `"offset"` is quoted because `offset` is a reserved word in SQL. The other columns record where the event was first read, for audit.
+A **migration** is a script that changes the structure of an existing database. This one is lesson step 3's schema change.
 
-### The two statements the consumer runs
+- Lines 1 to 4: comments. The key sentence: the consumer inserts into this table and updates `balances` **in one transaction**, so an event id is present **if and only if** its amount is already in the balance.
+- Line 6: `CREATE TABLE IF NOT EXISTS processed_events (`.
+- Line 7: `event_id uuid PRIMARY KEY`. `uuid` is a 128-bit unique identifier type. As the primary key it can exist only once in the table. This one rule is the heart of the project: a second attempt to insert the same event id fails or, with `ON CONFLICT DO NOTHING`, inserts nothing, and the code reads that as "already applied".
+- Line 8: `topic text NOT NULL`: where the event was first read, for audit only. Line 9: `partition integer NOT NULL`: a whole number. Line 10: `"offset" bigint NOT NULL`: a larger whole number (up to about 9 quintillion), the record's number in the partition. The word `offset` is a reserved word in SQL (it is part of `LIMIT ... OFFSET ...`), so the column name is put in double quotes everywhere it appears.
+- Line 11: `processed_at timestamptz NOT NULL DEFAULT now()`: when the row was added.
+- Line 12: `);`. Line 14: a `COMMENT ON TABLE` describing the table as the idempotence guard.
 
-```python
-ADD_TO_BALANCE = "UPDATE balances SET total = total + %s, updated_at = now() WHERE account_id = %s"
-RECORD_EVENT = (
-    'INSERT INTO processed_events (event_id, topic, partition, "offset") VALUES (%s, %s, %s, %s) '
-    "ON CONFLICT (event_id) DO NOTHING"
-)
-```
-
-- `UPDATE balances SET total = total + %s ... WHERE account_id = %s`: add an amount to one account's row. `%s` marks a place for a value that the driver sends separately (never pasted into the text), which prevents SQL injection. `WHERE` chooses the row.
-- `INSERT INTO processed_events (...) VALUES (...) ON CONFLICT (event_id) DO NOTHING`: record the event id. If it is already there, nothing is inserted and the database reports `rowcount` 0. That count is how the code learns "this event was already applied".
-
-### Queries and the reset
+### `sql/003_queries.sql`: the lesson's questions
 
 ```sql
 -- Queries the lesson runs. Read-only, safe to run at any time: make queries
@@ -122,7 +134,16 @@ FROM processed_events GROUP BY partition ORDER BY partition;
 SELECT account_id, total FROM balances ORDER BY total DESC LIMIT 5;
 ```
 
-`SELECT ... FROM ... ORDER BY` reads rows. `count(*)` and `sum(total)` are **aggregates**: one result for many rows. `GROUP BY ... HAVING count(*) > 1` finds ids that appear twice (always zero rows, because of the primary key). `LIMIT 5` keeps five rows.
+`SELECT` reads data and changes nothing. `make queries` runs the file.
+
+- Line 4: `SELECT account_id, total FROM balances ORDER BY account_id;`: two columns of every row, sorted by account id. This is the table the checker compares with `expected_totals.json`.
+- Line 7: `SELECT count(*) AS accounts, sum(total) AS grand_total FROM balances;`: **aggregate functions** collapse many rows into one: `count(*)` counts rows, `sum(total)` adds a column. `AS accounts` names the result column. The result is one row.
+- Line 10: the number of rows in `processed_events`: how many events were applied. After a clean run it equals the number of payments.
+- Line 13: `SELECT event_id, count(*) FROM processed_events GROUP BY event_id HAVING count(*) > 1;`. `GROUP BY event_id` makes one group per id; `HAVING count(*) > 1` keeps only groups with more than one row. The comment says the result is always empty, because `event_id` is the primary key; running the query is a way to see that.
+- Lines 16 and 17: for each partition, `max("offset")` is the highest offset applied and `count(*)` the number of events; `GROUP BY partition ORDER BY partition` gives one row per partition in order. It shows progress per partition.
+- Line 20: `ORDER BY total DESC LIMIT 5`: the five largest balances (`DESC` is descending; `LIMIT 5` keeps five rows).
+
+### `sql/reset.sql`: back to a clean start
 
 ```sql
 -- Back to a clean start for the next experiment: every balance zero, no processed events.
@@ -139,7 +160,23 @@ END
 $$;
 ```
 
-`UPDATE balances SET ...` with no `WHERE` changes every row. The `DO $$ ... $$` block runs a small program inside the database: `to_regclass('processed_events')` is not null only when that table exists, so the script works before the migration too. `TRUNCATE` empties a table quickly.
+- Line 4: `UPDATE balances SET total = 0, updated_at = now();` changes **every** row (there is no `WHERE`): zero the total, refresh the time.
+- Lines 6 to 12: `DO $$ ... $$;` runs a small block of procedural code inside the database, written in PostgreSQL's built-in language. `$$` is a quoting style for the block's text (any quotes inside need no escaping). `BEGIN ... END` brackets the code. `IF to_regclass('processed_events') IS NOT NULL THEN TRUNCATE processed_events; END IF;`: `to_regclass('name')` returns the table's identity if it exists and NULL if it does not; so the table is emptied (`TRUNCATE` deletes every row at once) only if it exists. That makes the reset work both before and after the migration has been applied.
+
+### The two statements the consumer runs
+
+These are the Python strings in `postgres_ledger.py`; each `%s` is a placeholder for a value that the driver sends separately from the SQL text.
+
+```python
+ADD_TO_BALANCE = "UPDATE balances SET total = total + %s, updated_at = now() WHERE account_id = %s"
+RECORD_EVENT = (
+    'INSERT INTO processed_events (event_id, topic, partition, "offset") VALUES (%s, %s, %s, %s) '
+    "ON CONFLICT (event_id) DO NOTHING"
+)
+```
+
+- `UPDATE balances SET total = total + %s, updated_at = now() WHERE account_id = %s` adds the amount to one account's row. The `WHERE` picks the row; with no matching row nothing changes and the database reports 0 rows changed.
+- `INSERT INTO processed_events (event_id, topic, partition, "offset") VALUES (%s, %s, %s, %s) ON CONFLICT (event_id) DO NOTHING` records the event. On a clash with an existing `event_id`, nothing is inserted, and the reported row count is 0. That count is how the code learns "already applied".
 
 ## Try it yourself
 

@@ -24,20 +24,36 @@ The template requires configuration to come from the environment, and secrets on
 
 ## Walkthrough of this repository's use
 
-The file has these groups (see `.env.example` in the repository root): the Kafka address and topic names, the PostgreSQL connection parts (`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`), the log level and the Kafka timeouts. The password in the template is a throwaway for a database that lives only while the container runs.
+First, what an **environment variable** is: a named piece of text that a program receives from the program that started it. Every process has its own set. A shell sets one for a single command like this: `TOPIC=other .venv/bin/python -m idempotent_consumer.interfaces.check_cli`.
 
-```make
--include .env
-```
+A `.env` file is a plain text file of `NAME=value` lines, one per line; a `#` starts a comment. It is a convenient place for the values for one machine. This repository ships `.env.example`, a copy-me template for the variables the programs read (the docstring of `Settings` points to it). **A secret never belongs in a file that is committed.** Here the one secret is the database password, and the rules are:
 
-```make
-export
-```
+- `.env` (the real file) is listed in `.gitignore` and `.dockerignore`, so it is never committed and never copied into an image.
+- The code has **no default password**, anywhere. `POSTGRES_PASSWORD` must be provided by the environment, or the programs stop with a clear error.
+- The compose file reads the password from the same variable, and refuses to start without it.
+
+### How `.env` gets created
 
 ```make
 env:
 	@[ -f .env ] || { cp .env.example .env; echo "created .env from .env.example"; }
 ```
+
+`make up` runs the `env` target first. The shell test `[ -f .env ]` is true if `.env` exists; if it does not, `cp .env.example .env` copies the template and a message is printed. After that you may edit `.env`.
+
+### How the values reach the programs
+
+```make
+-include .env
+export
+```
+
+- `-include .env` makes Make read `.env` if the file exists. Make understands `NAME=value` lines as variable assignments. The `-` means "no error if the file is missing".
+- `export` (alone on a line) passes every Make variable to the commands Make starts. So the password and the other values reach `python -m idempotent_consumer...`, which reads its environment.
+
+Docker Compose also reads `.env` by itself (it looks for a file of that name next to `docker-compose.yml`) to fill in the `${...}` placeholders in the compose file. So one file configures both the containers and the programs.
+
+### What reads them
 
 ```python
 def _text(environ: Mapping[str, str], name: str, default: str | None = None) -> str:
@@ -45,9 +61,62 @@ def _text(environ: Mapping[str, str], name: str, default: str | None = None) -> 
     if not value:
         raise ConfigurationError(f"{name} must be set and not empty")
     return value
+
+
+def _positive_int(environ: Mapping[str, str], name: str, default: int) -> int:
+    raw = environ.get(name, str(default)).strip()
+    if not raw.isdigit() or int(raw) < 1:
+        raise ConfigurationError(f"{name} must be a positive integer, got {raw!r}")
+    return int(raw)
 ```
 
-`_text` reads one variable, strips spaces and refuses an empty value. `Settings.from_env` applies defaults and checks the formats (a server list like `host:port`, a known log level). `POSTGRES_PASSWORD` is the only variable with **no default**: leave it out and the program stops with `POSTGRES_PASSWORD must be set and not empty`. The password field is excluded from the settings object's printed form, so it cannot appear in a log.
+`_text` reads one variable, strips spaces and refuses an empty value; without a default (the password) the variable must be present. `_positive_int` requires a whole number of at least 1. Their messages begin with the variable's name.
+
+```python
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
+        env = os.environ if environ is None else environ
+        servers = _text(env, "BOOTSTRAP_SERVERS", "localhost:9092")
+        if not _SERVERS.match(servers):
+            raise ConfigurationError(f"BOOTSTRAP_SERVERS must be host:port[,host:port], got {servers!r}")
+        level = _text(env, "LOG_LEVEL", "INFO").upper()
+        if level not in _LEVELS:
+            raise ConfigurationError(f"LOG_LEVEL must be one of {sorted(_LEVELS)}, got {level!r}")
+        return cls(
+            kafka=KafkaSettings(
+                bootstrap_servers=servers,
+                topic=_text(env, "TOPIC", "payments"),
+                dlq_topic=_text(env, "DLQ_TOPIC", "payments-dlq"),
+                group_id=_text(env, "GROUP_ID", "balance-updater"),
+                request_timeout_ms=_positive_int(env, "KAFKA_REQUEST_TIMEOUT_MS", 30_000),
+                retry_backoff_ms=_positive_int(env, "KAFKA_RETRY_BACKOFF_MS", 100),
+            ),
+            postgres=PostgresSettings(
+                host=_text(env, "POSTGRES_HOST", "localhost"),
+                port=_positive_int(env, "POSTGRES_PORT", 5433),
+                database=_text(env, "POSTGRES_DB", "bank"),
+                user=_text(env, "POSTGRES_USER", "bank"),
+                password=_text(env, "POSTGRES_PASSWORD"),
+                connect_timeout_seconds=_positive_int(env, "POSTGRES_CONNECT_TIMEOUT_SECONDS", 5),
+            ),
+            log_level=level,
+        )
+```
+
+`Settings.from_env` is the single place that knows every variable name. The thirteen variables, their defaults and meanings are in the table in `python-infrastructure.md` (section `settings.py`); in short: `BOOTSTRAP_SERVERS`, `TOPIC`, `DLQ_TOPIC`, `GROUP_ID`, `KAFKA_REQUEST_TIMEOUT_MS` and `KAFKA_RETRY_BACKOFF_MS` for Kafka; `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_CONNECT_TIMEOUT_SECONDS` for PostgreSQL; and `LOG_LEVEL`. Everything except `POSTGRES_PASSWORD` has a default that suits the compose setup.
+
+The password is held in `PostgresSettings.password`, a field marked `field(repr=False)`, so printing the settings object, logging it, or seeing it in an error message never shows it. A unit test checks that.
+
+### Where the password is also used
+
+```yaml
+      # Credentials come from .env (make up copies .env.example the first time); none is written here.
+      POSTGRES_USER: ${POSTGRES_USER:-bank}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env first}
+      POSTGRES_DB: ${POSTGRES_DB:-bank}
+```
+
+The compose file takes the same three database variables. `${POSTGRES_PASSWORD:?copy .env.example to .env first}` stops Compose with that message if the variable is unset or empty. The GitHub workflow supplies a throwaway value for its temporary database (`tech/github-actions.md`).
 
 ## Try it yourself
 

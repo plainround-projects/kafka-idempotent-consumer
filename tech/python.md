@@ -33,6 +33,8 @@ An **import** loads another module once. The **standard library** is what ships 
 
 ## Walkthrough of this repository's use
 
+This section introduces the language features one at a time, with one example each. Every source and test file is then walked through line by line in `python-domain.md`, `python-application.md`, `python-infrastructure.md`, `python-interfaces.md` and `python-tests.md`.
+
 ### Postponed type hints
 
 ```python
