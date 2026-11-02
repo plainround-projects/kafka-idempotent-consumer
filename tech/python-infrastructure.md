@@ -1,6 +1,6 @@
 # Python: the infrastructure layer, file by file
 
-## What this note covers
+## What it is
 
 The folder `src/idempotent_consumer/infrastructure/` holds the **adapters**: the code that touches the outside world. Kafka (through the `kafka-python` library), PostgreSQL (through `psycopg`), environment variables, log output, the clock's `sleep`, files on disk, other processes, and operating-system signals. Each adapter fits one of the **ports** (the descriptions in `application/ports.py`), so the use cases never know what is really behind them.
 
@@ -13,7 +13,11 @@ Words used below:
 - The **environment** is a set of named text values (like `TOPIC=payments`) that the operating system gives every program when it starts: **environment variables**.
 - A **database transaction** is a group of changes that either all happen or none do. A **commit** makes them permanent; a **rollback** throws them away.
 
-## The files
+## Why this repository uses it
+
+Everything that touches the outside world is kept in one layer: the Kafka producer, consumer and dead-letter sink, the PostgreSQL connection and the SQL statements, the environment and the password, logs, retries, signals and the child process of the crash test. Each adapter fits a port, so `kafka` and `psycopg` are imported in this layer only.
+
+## Where it appears
 
 | File | Role |
 | --- | --- |
@@ -30,7 +34,15 @@ Words used below:
 | `subprocess_runner.py` | Runs the consumer as a separate process for the crash test. |
 | `health_probes.py` | Health checks for Kafka and PostgreSQL. |
 
-## `infrastructure/__init__.py`
+## How it works underneath
+
+An **adapter** is a class that wraps a library and exposes only the methods of a port. Creating a client object (a producer, a consumer, a connection) opens network connections, and the Kafka clients also start background threads that send and fetch. Settings are read once at start from `os.environ`, the dictionary of environment variables the operating system gave the process, and checked at once. **Retry with backoff** repeats a failing call with growing, slightly random pauses. A **signal** such as Ctrl+C or `docker stop` makes the operating system call a function registered with `signal.signal`; Python runs it in the main thread between two steps of the program, and here it only raises a flag that the work loops test. Library errors are caught at the edge and re-raised as the application's own named errors, so the layers above never see a library class. Here the consumer has auto-commit off, so offsets move only when the use case commits them, and the database connection uses `autocommit=True`, so a `with connection.transaction():` block is the only transaction boundary. The password comes from the environment only and is hidden from the printed form of the settings.
+
+## Walkthrough of this repository's use
+
+Every source file of this layer is read below, in the order of the table above. Each block is a piece of the real file, copied exactly, followed by an explanation in plain words.
+
+### `infrastructure/__init__.py`
 
 ```python
 """Adapters: Kafka clients, PostgreSQL, settings, logging, retries, signals, subprocesses."""
@@ -38,7 +50,7 @@ Words used below:
 
 Only a docstring: it marks the folder as a package and states the layer's job.
 
-## `settings.py`: the environment, checked once
+### `settings.py`: the environment, checked once
 
 A regular expression (**regex**) is a short pattern that describes text. `re` is Python's module for them.
 
@@ -176,7 +188,7 @@ class Settings:
 
 **Fail fast:** every wrong value stops the program at startup with a message that names the variable, instead of crashing later in the middle of a run.
 
-## `kafka_producers.py`: publishing and parking
+### `kafka_producers.py`: publishing and parking
 
 ```python
 """Adapters: publish payments and park dead letters with kafka-python."""
@@ -246,7 +258,7 @@ class KafkaDeadLetterSink:
 - Line 44: `timeout_seconds` defaults to 30. Line 45: the topic defaults to the dead-letter topic.
 - Line 50: `self._producer.send(...).get(timeout=self._timeout)`. `send` returns a **future**, an object standing for a result that is not ready yet. `.get(timeout)` waits for it: it returns when the broker has acknowledged the record, and raises an error if the wait ends first or the send fails. That is the promise of `DeadLetterSink.send` ("returns only once safely stored"). No key is given, so the letter is spread over partitions.
 
-## `kafka_consumer.py`: reading and committing by hand
+### `kafka_consumer.py`: reading and committing by hand
 
 ```python
 """Adapter: read payments as a group member and commit offsets with kafka-python."""
@@ -338,7 +350,7 @@ class KafkaPaymentConsumer:
 - Lines 62 to 65: `self._consumer.commit(offsets)` sends the commit. If the group refuses (for example because this member was evicted) the library raises a `KafkaError`; the code converts it to the application's `CommitRejectedError`, carrying the original error's class name (`type(error).__name__`). The application layer never sees a Kafka-specific class.
 - Lines 67 and 68: `close` leaves the group.
 
-## `postgres.py`: opening connections
+### `postgres.py`: opening connections
 
 A **connection** is an open conversation with the database.
 
@@ -389,7 +401,7 @@ def connect(settings: PostgresSettings, attempts: int = 5) -> psycopg.Connection
 - Lines 20 to 29: the inner function `open_connection` calls `psycopg.connect(...)` with the host, port, database name (`dbname`), user, password and `connect_timeout` (seconds before giving up on a connection attempt). **`autocommit=True`** means the connection does not open an implicit transaction around each statement: every statement commits at once unless the code opens a transaction itself. The docstring on line 18 states the consequence: `with connection.transaction():` is the only transaction boundary, so what is in a transaction is visible in the code.
 - Lines 31 to 38: `retry(...)` calls `open_connection` up to `attempts` times (default 5), starting with a 0.5-second pause that doubles, but only for `psycopg.OperationalError` (the library's error for "cannot connect", "server closed the connection"). Each retry is logged by the `lambda`, a one-line nameless function. The retry helper is explained below in `retry.py`.
 
-## `postgres_ledger.py`: the SQL
+### `postgres_ledger.py`: the SQL
 
 **SQL** is the language for talking to a relational database. See `tech/sql.md`. The two statements of this project are strings in Python; the values are never pasted into the text.
 
@@ -496,7 +508,7 @@ class PostgresLedgerAdmin:
 - Lines 58 to 66: `PostgresBalanceReader.read_balances` runs `SELECT account_id, total FROM balances` and `.fetchall()` returns all rows as tuples. The dictionary comprehension builds `{account: Decimal(total)}`; `Decimal(total)` is safe because the column returns exact decimals.
 - Lines 69 to 78: `PostgresLedgerAdmin.reset` runs, in one transaction, `UPDATE balances SET total = 0, updated_at = now()` and `TRUNCATE processed_events` (delete every row at once). The crash test calls it between runs.
 
-## `expected_file.py`: the expected totals on disk
+### `expected_file.py`: the expected totals on disk
 
 ```python
 """Adapter: the expected totals the producer writes and the checker reads (a JSON file)."""
@@ -537,7 +549,7 @@ class JsonExpectedStore:
 - Lines 21 to 30: `JsonExpectedStore` is the adapter for the `ExpectedTotalsStore` port: it remembers a path and its `save` calls `save_expected`.
 - The producer writes the file and the checker reads it later, even in a separate program, so the check does not depend on the producer still running.
 
-## `subprocess_runner.py`: a real crash needs a real process
+### `subprocess_runner.py`: a real crash needs a real process
 
 A **process** is a running program. Killing a process is different from raising an error inside it: nothing gets to clean up.
 
@@ -576,7 +588,7 @@ class SubprocessConsumerRunner:
 - Line 23: `command += [...] if kill_at else [...]` adds either `--kill-at N` (die at record N) or `--until-idle 5` (a clean finish when no record has come for 5 seconds).
 - Lines 24 to 26: make the log folder (`parents=True, exist_ok=True` means create missing parents and no error if present), open the log file for appending (`"a"`), and run the command with both output streams sent to the file. `check=False` means a non-zero exit code is returned, not raised. `.returncode` is the exit code: the crash test needs to see the killed consumer's exit code (1).
 
-## `health_probes.py`: are the dependencies usable?
+### `health_probes.py`: are the dependencies usable?
 
 ```python
 """Adapters: is Kafka reachable with the payments topics, and is PostgreSQL reachable with the schema?"""
@@ -664,7 +676,7 @@ class PostgresSchemaProbe:
 - Lines 66 and 67: if the row is missing or false, the message says the table does not exist and tells the reader to run `make db`.
 - Line 68: on success, `table balances exists`.
 
-## `logging.py`: one line per event
+### `logging.py`: one line per event
 
 **Logging** is a program writing a line of text about what it is doing. **Logfmt** is a simple format: `key=value key=value ...` on one line. See `tech/logfmt.md`.
 
@@ -737,7 +749,7 @@ def configure_logging(level: str, stream: TextIO | None = None) -> None:
 - Lines 39 to 46: `configure_logging(level, stream=None)`. `logging.StreamHandler(stream or sys.stderr)` is a handler that writes records to a stream; `stream or sys.stderr` uses the given stream or, when `None`, stderr. `handler.setFormatter(...)` attaches the formatter. `root = logging.getLogger()` is the **root logger**, the parent of all loggers. `root.handlers[:] = [handler]` replaces its list of handlers in place, so calling the function twice does not print every line twice ("safe to call twice"). `root.setLevel(level)` drops records below the level.
 - Line 46: the library `kafka-python` logs a lot at INFO level. `logging.getLogger("kafka").setLevel(max(logging.getLevelName(level), logging.WARNING))` makes it at least `WARNING`. `getLevelName("INFO")` returns the number 20; `max` keeps the higher of that and `WARNING`'s 30. So the library is quiet unless it has a problem, whatever level the programs use.
 
-## `retry.py`: trying again, politely
+### `retry.py`: trying again, politely
 
 ```python
 """Retry with exponential backoff and jitter for calls that cross the network."""
@@ -800,7 +812,7 @@ def retry[T](
 - Line 37: sleep the computed time. `min(cap, base * 2 ** (attempt - 1))` is the capped pause; `jitter.uniform(0.5, 1.0)` is the random factor.
 - Line 38: this line can never run (the loop either returns or raises), but `mypy` cannot prove that. `raise AssertionError("unreachable")` satisfies it, and the comment `# pragma: no cover` tells the coverage tool not to count the line as untested.
 
-## `shutdown.py`: leaving cleanly
+### `shutdown.py`: leaving cleanly
 
 A **signal** is a message the operating system sends to a running program. `SIGINT` is sent when you press Ctrl+C in the terminal. `SIGTERM` is the polite "please stop" that `docker stop` sends. By default Python stops on SIGINT with an error and the program may die in the middle of a batch.
 
@@ -876,3 +888,17 @@ Retry timing is the same as in the other repositories: `retry(flaky, attempts=5,
 1. What does `ON CONFLICT (event_id) DO NOTHING` do, and how does the code notice it happened? (It inserts nothing for an existing id; `cursor.rowcount` is then 0.)
 2. Why is `autocommit=True` used together with `connection.transaction()`? (So that the transaction blocks in the code are the only transaction boundaries.)
 3. Why does the dead-letter sink call `.get(timeout=...)`? (It waits for the broker's acknowledgment, so the offset is never committed for a record that was not parked.)
+4. What does `field(repr=False)` do for the password? (It leaves the password out of the printed form of the settings object, so logs and error messages never show it.)
+5. What does `cursor.rowcount == 0` after the `RECORD_EVENT` insert mean? (The event id already existed (`ON CONFLICT DO NOTHING` inserted nothing), so the payment is a duplicate.)
+
+## Further reading
+
+- Python 3.12 `os` (environment variables): https://docs.python.org/3.12/library/os.html
+- Python 3.12 `logging`: https://docs.python.org/3.12/library/logging.html
+- Python 3.12 `signal`: https://docs.python.org/3.12/library/signal.html
+- Python 3.12 `threading`: https://docs.python.org/3.12/library/threading.html
+- Python 3.12 `re`: https://docs.python.org/3.12/library/re.html
+- kafka-python documentation (the repository pins version 3.0.12): https://kafka-python.readthedocs.io/en/master/
+- psycopg 3: transactions: https://www.psycopg.org/psycopg3/docs/basic/transactions.html
+- Python 3.12 `subprocess`: https://docs.python.org/3.12/library/subprocess.html
+- Python 3.12 `pathlib`: https://docs.python.org/3.12/library/pathlib.html

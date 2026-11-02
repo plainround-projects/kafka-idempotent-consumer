@@ -45,18 +45,20 @@ A table has a header row, a line of dashes that marks it as a table, and one lin
 The three files in `docs/adr/` each follow the same five headings:
 
 ```markdown
-# 1. Record the event id in the same database transaction as the balance update
+  # 1. Record the event id in the same database transaction as the balance update
 
-Status: accepted, 2026-10-26
+  Status: accepted, 2026-10-26
 
-## Context
+  ## Context
 
-Kafka delivers at least once. A consumer that writes to PostgreSQL and then commits its offset has a gap: a crash between the two redelivers a payment that is already in the balance. The consumer must leave the balance right whatever the timing of a crash, a rebalance or an eviction.
+  Kafka delivers at least once. A consumer that writes to PostgreSQL and then commits its offset has a gap: a crash between the two redelivers a payment that is already in the balance. The consumer must leave the balance right whatever the timing of a crash, a rebalance or an eviction.
 
-## Decision
+  ## Decision
 
-Keep a table `processed_events` with `event_id` as primary key. For each payment, in one database transaction, insert the event id (`ON CONFLICT DO NOTHING`) and, only if a row was inserted, add the amount to the balance. Commit the Kafka offset after the database commit. A redelivered event inserts nothing and is skipped.
+  Keep a table `processed_events` with `event_id` as primary key. For each payment, in one database transaction, insert the event id (`ON CONFLICT DO NOTHING`) and, only if a row was inserted, add the amount to the balance. Commit the Kafka offset after the database commit. A redelivered event inserts nothing and is skipped.
 ```
+
+(The block is shown indented by two spaces so that its heading lines are not mistaken for headings of this note.)
 
 - **Title**, numbered, one decision. **Status** with a date.
 - **Context**: the forces that made a decision necessary.

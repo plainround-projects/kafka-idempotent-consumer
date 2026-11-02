@@ -1,6 +1,6 @@
 # Python: the domain layer, file by file
 
-## What this note covers
+## What it is
 
 The folder `src/idempotent_consumer/domain/` holds the **business rules** of the project: what a payment event is, how a bad one is recognised, how to tell whether a balance is right, what a parked "dead letter" contains, and where the crash test kills the consumer. "Business rules" means rules that would stay true if Kafka and PostgreSQL were thrown away. This is the innermost layer, and its one rule is: it may import only from Python's standard library (the modules that ship with Python). `make lint` fails if a file here imports `kafka` or `psycopg`.
 
@@ -11,7 +11,11 @@ Two words you need before starting:
 - A **module** is one file whose name ends in `.py`. A **package** is a folder of modules that contains a file named `__init__.py`. Here `idempotent_consumer` is the package and `idempotent_consumer.domain` a package inside it.
 - A **docstring** is text in triple quotes (`"""..."""`) at the start of a file, class or function. Python keeps it so people and tools can read what the thing is for. It does nothing when the program runs.
 
-## The files
+## Why this repository uses it
+
+The lesson's promise is that every payment changes a balance exactly once. The rules behind it (what a valid payment is, why money is an exact decimal, how to tell that a balance is wrong, what a parked bad record must contain, where the crash test strikes) need no database and no broker. Keeping them in a package that imports only the standard library means they can be tested in milliseconds and cannot depend on how data is stored.
+
+## Where it appears
 
 | File | What it holds |
 | --- | --- |
@@ -23,7 +27,15 @@ Two words you need before starting:
 | `domain/dead_letter.py` | The record that is parked when an event can never be processed. |
 | `domain/crash_plan.py` | The positions at which the crash test kills the consumer. |
 
-## `src/idempotent_consumer/__init__.py` and `domain/__init__.py`
+## How it works underneath
+
+When Python loads a module it runs the file once, top to bottom. `import` lines load other modules; `class` and `def` lines create classes and functions; nothing inside a function runs until the function is called. A **class** is a blueprint and an **object** is one thing built from it. The `@dataclass` decorator reads the class's field annotations when the class is created and writes `__init__`, `__eq__` and `__repr__` for it; `frozen=True` makes assignment to a field raise an error. When code **raises** an error, Python stops the current function and looks up the chain of callers for a matching `except`; if none is found the program ends with a traceback. **Type hints** are ignored when the program runs; `mypy` reads them without running the code. The rule that this layer imports only the standard library is checked by `import-linter`, which reads the `import` lines of every file, builds a graph of who imports whom and fails if an arrow points the wrong way. Here money is a `Decimal`, built from text, never a `float`: `0.1 + 0.2` is exactly `0.3` for a `Decimal` and `0.30000000000000004` for a float. Randomness is passed in as a seeded generator, so the same seed gives the same payments and the same event ids.
+
+## Walkthrough of this repository's use
+
+Every source file of this layer is read below, in the order of the table above. Each block is a piece of the real file, copied exactly, followed by an explanation in plain words.
+
+### `src/idempotent_consumer/__init__.py` and `domain/__init__.py`
 
 ```python
 """A Kafka consumer that keeps PostgreSQL account balances correct under at-least-once delivery."""
@@ -40,7 +52,7 @@ __version__ = "0.1.0"
 
 Only a docstring. A file with this name makes the folder a package. The other layer folders have an `__init__.py` of the same kind.
 
-## `domain/errors.py`
+### `domain/errors.py`
 
 ```python
 """Named errors of the domain."""
@@ -54,11 +66,11 @@ class PoisonMessageError(ValueError):
 - Line 5: the docstring gives the meaning. A **poison message** is a record that can never be processed, however often it is retried (it is not valid JSON, or the amount is text). The consumer's rule is: do not retry a poison message forever; park it in the dead-letter topic and move on.
 - The class has no body beyond the docstring. Its value is its name, which a log line or a test can match exactly.
 
-## `domain/payments.py`
+### `domain/payments.py`
 
 This is the largest file. It is read in seven pieces.
 
-### Imports and constants
+#### Imports and constants
 
 ```python
 """The payment event: how it is built, validated and compared. No I/O beyond reading JSON bytes."""
@@ -89,7 +101,7 @@ CENTS = Decimal("0.01")
 - Line 15: `ACCOUNTS` is a tuple (a read-only list) of 50 account ids. The expression in round brackets is a **generator expression**: `f"acct-{number:03d}" for number in range(1, 51)` builds one text per number from 1 to 50. In `{number:03d}`, the part after the colon is a format: `d` whole number, `3` at least three characters, `0` pad with zeros. So the ids are `acct-001` to `acct-050`. The hint `tuple[str, ...]` says "a tuple of any number of texts".
 - Line 16: `CENTS = Decimal("0.01")` is one cent. The name in capitals is a constant.
 
-### The payment
+#### The payment
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -109,7 +121,7 @@ class Payment:
 - Lines 23 to 25: three **fields**, each `name: type`. `event_id` is a text that identifies the *event*; the docstring stresses it identifies the event and not its place in the log. This is the whole point of the project: Kafka may deliver one event twice (at two different offsets), and the event id is how the database recognises that it has already seen it. `account_id` is a text. `amount` is a `Decimal`.
 - Lines 27 to 29: a **method** (a function inside a class; its first parameter `self` is the object itself) that returns the dictionary the producer sends as JSON. `float(self.amount)` turns the exact decimal into an ordinary number for JSON, which has no decimal type. Because every amount has at most two decimals, the number prints back exactly as typed.
 
-### Building test payments
+#### Building test payments
 
 ```python
 def build_payments(count: int, rng: random.Random, accounts: tuple[str, ...] = ACCOUNTS) -> list[Payment]:
@@ -130,7 +142,7 @@ def build_payments(count: int, rng: random.Random, accounts: tuple[str, ...] = A
 - Line 37: `rng.choice(accounts)` picks one account at random.
 - Line 38: `Decimal(rng.randint(100, 50_000)) * CENTS`: a random whole number of cents from 100 to 50,000 (`50_000` is just `50000`, underscores make long numbers readable), multiplied by one cent, so the amount is between 1.00 and 500.00 with exactly two decimals.
 
-### What the balances must be
+#### What the balances must be
 
 ```python
 def expected_totals(payments: Iterable[Payment], accounts: tuple[str, ...] = ACCOUNTS) -> dict[str, Decimal]:
@@ -145,7 +157,7 @@ def expected_totals(payments: Iterable[Payment], accounts: tuple[str, ...] = ACC
 - Lines 47 and 48: loop over the payments and add each amount to its account. `totals[payment.account_id] += payment.amount` means "add to the value stored under that key".
 - The docstring states the key idea: expected totals are computed from the *payments alone*, never read back from the database. The check at the end of a test compares the database with this independent calculation.
 
-### Validating an incoming record
+#### Validating an incoming record
 
 ```python
 def parse_payment(raw: bytes) -> Payment:
@@ -194,7 +206,7 @@ def parse_amount(value: object) -> Decimal:
 - Lines 79 and 80: poison if the value is not finite (`NaN`, infinity), is zero or negative, or has more than two decimals (`exponent < -2`). The `isinstance(exponent, int)` check satisfies the type checker, because the exponent of `NaN` is a letter code, not a number. The checks mean that `"12.34"`, `12.34` and `5` are accepted and `12.345`, `0`, `-1` and `"NaN"` are refused. (A value written with a positive exponent such as `"1e2"` is read as the number 100 and accepted.)
 - Line 81: return the validated `Decimal`.
 
-### Making the lesson's poison event
+#### Making the lesson's poison event
 
 ```python
 def poison_payload(rng: random.Random, account_id: str = "acct-012") -> dict[str, Any]:
@@ -221,7 +233,7 @@ def with_poison(payloads: list[dict[str, Any]], poison_count: int, rng: random.R
 - Lines 84 to 90: `poison_payload` returns a dictionary shaped like a payment whose amount is the text `"not-a-number"`. Its id again comes from the seeded generator. The default `account_id="acct-012"` is a default parameter value.
 - Lines 93 to 102: `with_poison(payloads, poison_count, rng)` returns a copy of the list of payloads with `poison_count` poison events inserted at evenly spaced positions, so valid payments follow every poison event ("the consumer has to move on to prove it can"). `list(payloads)` makes a copy so the caller's list is untouched. The loop `for number in reversed(range(poison_count))` goes from the last to the first; inserting from the back keeps the positions of the earlier insertions valid (the comment says so). `//` is whole-number division. For 10 payloads and 3 poison events the positions come out as 2, 6 and 9 in the final list.
 
-## `domain/balances.py`
+### `domain/balances.py`
 
 ```python
 """Compare balances with the totals they must have."""
@@ -264,7 +276,7 @@ def diff_balances(expected: Mapping[str, Decimal], actual: Mapping[str, Decimal]
 - Lines 22 to 23: `__str__` is the special method Python calls to turn the object into text. The format `{self.off_by:+}` always writes the sign: `+0.50` or `-0.50`. A printed mismatch looks like `MISMATCH acct-047: expected 10.00, got 10.50 (off by +0.50)`.
 - Lines 26 to 33: `diff_balances(expected, actual)` takes two dictionaries (`Mapping` is the hint for a read-only one). `set(expected) | set(actual)` is the **union** of the two sets of account ids, so an account that appears on only one side is still compared; `sorted(...)` gives account order. The `if` at the end of the comprehension keeps only the accounts whose values differ. `expected.get(account, zero)` is the value or zero when absent. The comparison uses `Decimal` equality, so `1` and `1.00` are equal and do not produce a false mismatch. An empty list means every balance is right.
 
-## `domain/dead_letter.py`
+### `domain/dead_letter.py`
 
 ```python
 """A record parked in the dead-letter topic, with everything needed to find and replay it."""
@@ -304,7 +316,7 @@ A **dead-letter topic** is a Kafka topic where unprocessable records are parked,
 - Lines 10 to 18: the frozen dataclass has five fields: the original topic, partition and offset (exactly where the record sat), the error text and the record's raw bytes.
 - Lines 20 to 29: `payload()` builds the dictionary written to the dead-letter topic as JSON. `self.raw.decode("utf-8", errors="replace")` turns bytes into readable text, swapping any invalid byte for the replacement character; that copy is for humans. `base64.b64encode(self.raw).decode("ascii")` is the exact bytes as text, so a later replay is byte-for-byte faithful even if the original was not valid text (the comment says so). Example: the bytes `ff 20 61 62 63` become the readable `� abc` and the exact `/yBhYmM=`.
 
-## `domain/crash_plan.py`
+### `domain/crash_plan.py`
 
 ```python
 """Where the crash test kills the consumer."""
@@ -364,3 +376,16 @@ Expected: `[2537, 5074, 7611]`.
 1. Why does `parse_amount` call `Decimal(str(value))` and not `Decimal(value)`? (A `float` carries a binary approximation; going through text keeps what was typed.)
 2. Why is the dead letter stored both as readable text and as base64? (Readable for people; base64 for an exact replay.)
 3. What does an empty result from `diff_balances` mean? (Every account's balance equals what it must be.)
+4. What does `parse_amount` accept and what does it refuse? (It accepts a positive, finite number with at most two decimals (`"12.34"`, `12.34`, `5`). It refuses 0, negatives, `NaN`, a boolean, `None`, text that is not a number and anything with more than two decimals.)
+5. Why do `kill_points(3, 10000)` give the same list every time? (The positions come from arithmetic on the number of runs and payments, with no randomness: `[2537, 5074, 7611]`.)
+
+## Further reading
+
+- Python 3.12 `dataclasses`: https://docs.python.org/3.12/library/dataclasses.html
+- Python 3.12 `enum`: https://docs.python.org/3.12/library/enum.html
+- Python 3.12 data model (classes, special methods): https://docs.python.org/3.12/reference/datamodel.html
+- Python 3.12 built-in exceptions: https://docs.python.org/3.12/library/exceptions.html
+- Python 3.12 `decimal`: https://docs.python.org/3.12/library/decimal.html
+- Python 3.12 `json`: https://docs.python.org/3.12/library/json.html
+- Python 3.12 `uuid`: https://docs.python.org/3.12/library/uuid.html
+- Python 3.12 `base64`: https://docs.python.org/3.12/library/base64.html

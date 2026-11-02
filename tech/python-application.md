@@ -1,6 +1,6 @@
 # Python: the application layer, file by file
 
-## What this note covers
+## What it is
 
 The folder `src/idempotent_consumer/application/` holds the **use cases**: the things the program does, written as plain functions: publish payments, consume payments safely, check balances, run the crash test, check health. A use case does not know about Kafka or PostgreSQL. It only knows **ports**, small descriptions of what it needs from the outside ("something that can apply a payment to the ledger", "something that can commit offsets"). The real Kafka and PostgreSQL code (in `infrastructure/`) and the in-memory fakes used by tests both fit those descriptions.
 
@@ -13,7 +13,11 @@ Words used below, explained where they first appear:
 - A **transaction** (in a database) is a group of changes that either all happen or none do. A **commit** makes them permanent. A **rollback** throws them away.
 - An **offset** is the number of a record inside one partition of a Kafka topic, counted from 0. A consumer **commits an offset** to tell Kafka "everything before this is done; if I restart, start here".
 
-## The files
+## Why this repository uses it
+
+The use cases hold the lesson's logic: apply each payment once, commit the offset only after the database commit, park a bad record, count an eviction, run the crash test. Writing them against ports instead of Kafka and PostgreSQL means a test can replay a crash, a duplicate or a rejected commit with in-memory fakes, in milliseconds, and the order of the two commits is visible in one place.
+
+## Where it appears
 
 | File | What it holds |
 | --- | --- |
@@ -25,7 +29,15 @@ Words used below, explained where they first appear:
 | `application/crash_test.py` | The use case "crash the consumer at many points and check the balances after each restart". |
 | `application/health.py` | The use case "ask every dependency if it works". |
 
-## `application/__init__.py`
+## How it works underneath
+
+A **port** is written as a `Protocol` class: a list of method names and signatures. Python does not check at run time that an object has them; `mypy` checks, before the program runs, that whatever is passed where a port is expected has the right methods (so an adapter or a fake needs no "implements" word). A use case is an ordinary function that receives its collaborators as parameters, including the clock, the sleep function and the stop test as small functions (**dependency injection**), so a test passes fakes and a real program passes `time.time` and `time.sleep`. Control flow is plain Python: loops, `try`/`except`, early `return`. The rule that this layer imports only the domain and the standard library is checked by `import-linter`. Here the order of two commits is the whole point: `_handle_batch` applies a record (the database transaction commits inside `ledger.apply`), calls `after_apply`, and only then commits the offset. A crash between the two makes Kafka deliver the record again, and the ledger answers `DUPLICATE`.
+
+## Walkthrough of this repository's use
+
+Every source file of this layer is read below, in the order of the table above. Each block is a piece of the real file, copied exactly, followed by an explanation in plain words.
+
+### `application/__init__.py`
 
 ```python
 """Use cases and the ports they need. Depends on the domain only."""
@@ -33,11 +45,11 @@ Words used below, explained where they first appear:
 
 Only a docstring. Its presence makes the folder a package, and its sentence states the layer's rule: depends on the domain only.
 
-## `application/ports.py`
+### `application/ports.py`
 
 A **port** is a description of what a use case needs, written without saying how it is done. The word comes from the "ports and adapters" design: the use cases sit in the middle, the ports are sockets in their wall, and **adapters** in `infrastructure/` are plugs that fit. You can swap plugs without touching the middle.
 
-### Imports, the error and the outcome
+#### Imports, the error and the outcome
 
 ```python
 """The ports the use cases need. Infrastructure adapters implement them; tests use fakes."""
@@ -85,7 +97,7 @@ class Delivery:
 - Lines 19 to 24: `Outcome` is an enumeration of the three things that can happen to one payment: `APPLIED` (added to the balance), `DUPLICATE` (this event was already applied; nothing was changed) and `DEAD_LETTERED` (unusable; parked). Members are also plain text (`"applied"`, `"duplicate"`, `"dead-lettered"`).
 - Lines 27 to 35: `Delivery` is a frozen (read-only) dataclass: a record as read from the log, with its topic, partition, offset, key (`bytes | None`: raw bytes, or no value) and value (raw bytes). `@dataclass` writes the boring methods; `frozen=True` forbids changing it; `slots=True` saves memory.
 
-### The ports
+#### The ports
 
 ```python
 class PaymentPublisher(Protocol):
@@ -190,7 +202,7 @@ class HealthProbe(Protocol):
 - Lines 110 to 114: `ConsumerRunner.run(group_id, kill_at, commit_every)` runs the consumer **as a separate process** and returns its exit code. The crash test needs a separate process because it kills one.
 - Lines 117 to 123: `HealthProbe` has a class attribute `name: str` and a method `check()` returning a short detail or raising `ProbeFailedError`.
 
-## `application/produce_payments.py`
+### `application/produce_payments.py`
 
 ```python
 """Use case: publish payments, optionally mixed with malformed events, and record the expected totals."""
@@ -269,11 +281,11 @@ def produce_payments(
 - Lines 57 and 58: only if there are payments and the run was *not* cut short, save the expected totals. The docstring explains: totals of a run that was cut short would describe payments that were never sent. Poison events are never part of the totals, because they must not change any balance.
 - Line 59: return the result.
 
-## `application/consume_payments.py`: the heart of the project
+### `application/consume_payments.py`: the heart of the project
 
 The promise: **every payment changes a balance exactly once**, even though Kafka delivers at-least-once (a record may come again after a crash, a rebalance or a retry). Two mechanisms make that true: the database refuses to apply an event id twice (in `infrastructure/postgres_ledger.py`), and the offset is committed to Kafka only **after** the database commit. If the consumer dies between the two, the record comes again and the database says "duplicate".
 
-### The plan and the counters
+#### The plan and the counters
 
 ```python
 """Use case: keep balances correct from a stream of payments that may arrive more than once."""
@@ -340,7 +352,7 @@ class ConsumeCounts:
 - Lines 25 to 37: `ConsumePlan`, a frozen dataclass. Each field has a default and a `#` comment (ignored by Python) saying what it does: `commit_every` (commit offsets after this many records; 1 means after every record, "the lesson's shape"), `work_delay_seconds` (artificial work per record, to make a slow consumer), `idle_timeout_seconds` (stop after this long without a record, counted only after the group has assigned partitions), `run_seconds` (stop after this long in total), `poll_seconds` (how long one poll waits). The check in `__post_init__` refuses a `commit_every` under 1, a negative delay or a poll time of 0 or less.
 - Lines 40 to 56: `ConsumeCounts` is a *changeable* dataclass (plain `@dataclass`, because the numbers grow). Fields: `applied`, `duplicate`, `dead_lettered`, `evictions` and `processed`, each starting at 0. `field(default=0, repr=False)` gives `processed` a default and leaves it out of the automatic printout. `summary()` returns the four counters as a dictionary for printing.
 
-### The main loop
+#### The main loop
 
 ```python
 def consume_payments(
@@ -392,7 +404,7 @@ def consume_payments(
 - Lines 87 to 92: `break` if an idle timeout is set, no records came this time, and more than that long has passed since the last record.
 - Line 93: return the counts.
 
-### Handling one batch
+#### Handling one batch
 
 ```python
 def _handle_batch(
@@ -434,7 +446,7 @@ A **batch** is the list of records one `poll` returned. A leading underscore in 
 - Lines 116 to 119: when `commit_every` records have been handled, commit what is pending. `_commit` returns `False` if the group refused (the member was evicted). In that case `return` leaves the function at once: the remaining records of the batch now belong to whoever owns the partitions, and their database changes have not been made. Otherwise `pending, since_commit = {}, 0` resets both together (a **tuple assignment**: two names, two values).
 - Lines 120 and 121: at the end of the batch, if records are still waiting for a commit (the batch ended before `commit_every` was reached), commit them.
 
-### Applying one record
+#### Applying one record
 
 ```python
 def _apply(delivery: Delivery, ledger: BalanceLedger, dead_letters: DeadLetterSink) -> Outcome:
@@ -461,7 +473,7 @@ def _apply(delivery: Delivery, ledger: BalanceLedger, dead_letters: DeadLetterSi
 - Lines 129 to 139: logs a warning. `extra={"fields": {...}}` attaches the key-value pairs that the logfmt formatter prints (see `python-infrastructure.md`).
 - Line 140: returns `DEAD_LETTERED`.
 
-### Counting and committing
+#### Counting and committing
 
 ```python
 def _count(counts: ConsumeCounts, outcome: Outcome) -> None:
@@ -490,7 +502,7 @@ def _commit(committer: OffsetCommitter, pending: dict[tuple[str, int], int], cou
 - Lines 143 to 150: `_count` adds one to `processed`, then to the counter that matches the outcome. `is` compares identity, the right test for enum members. `elif` means "otherwise, if"; `else` catches the last case.
 - Lines 153 to 163: `_commit` calls `committer.commit(dict(pending))` (a copy, so later changes to `pending` cannot affect the call). On `CommitRejectedError` it counts an eviction, logs `EVICTED: offset commit rejected; rejoining on the next poll` and returns `False`; otherwise `True`. The next `poll` makes the client rejoin the group.
 
-## `application/check_balances.py`
+### `application/check_balances.py`
 
 ```python
 """Use case: compare the balance table with the totals it must have."""
@@ -511,7 +523,7 @@ def check_balances(reader: BalanceReader, expected: Mapping[str, Decimal]) -> li
 
 One line of work (line 14): read every balance through the port and let the domain compare it with the expected totals. It returns the list of mismatches; an empty list means everything is right.
 
-## `application/crash_test.py`
+### `application/crash_test.py`
 
 ```python
 """Use case: crash the idempotent consumer at many points and check the balances after each restart."""
@@ -581,7 +593,7 @@ def run_crash_test(
 - Line 50: compare the balances with the expected totals and record the result. Lines 51 and 52: keep it and report it.
 - Line 53: return all runs. The caller prints a verdict.
 
-## `application/health.py`
+### `application/health.py`
 
 ```python
 """Use case: ask every dependency whether it is usable."""
@@ -670,3 +682,12 @@ Expected: a `ProduceResult` with `payments=5, poison=1, stopped=False`; `6 paylo
 1. Why is the offset committed after the database commit? (A crash in between causes redelivery, which the ledger recognises; the reverse order would lose payments.)
 2. What does `after_apply` exist for? (The crash test's kill switch at the dangerous moment between the two commits.)
 3. What happens to the rest of a batch when a commit is rejected? (It is abandoned; it belongs to the new owner of the partitions.)
+4. What does the outcome `DUPLICATE` mean? (The event id was already recorded, so nothing was changed.)
+5. Besides arriving records, when does the consumer restart its idle clock? (While the member has no partition assignment, because after a crash the group may hold the dead member's partitions until its session expires.)
+
+## Further reading
+
+- PEP 544, Protocols (structural typing): https://peps.python.org/pep-0544/
+- Python 3.12 `typing`: https://docs.python.org/3.12/library/typing.html
+- Python 3.12 `dataclasses`: https://docs.python.org/3.12/library/dataclasses.html
+- Python 3.12 `logging`: https://docs.python.org/3.12/library/logging.html

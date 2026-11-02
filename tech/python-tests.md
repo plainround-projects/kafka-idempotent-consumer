@@ -1,6 +1,6 @@
 # Python: the tests, file by file
 
-## What this note covers
+## What it is
 
 Everything under `tests/` is Python written to check the rest of the code. This note walks through **every test file and every test**. How the tests are *started* (the `pytest` command, markers, coverage numbers) is in `tech/pytest.md` and `tech/pytest-cov.md`; here the focus is on what each test proves and how it is written.
 
@@ -13,8 +13,11 @@ Ideas you need first:
 - **Unit tests** (in `tests/unit/`) need neither Kafka nor PostgreSQL and run in well under a second. **Integration tests** (`tests/integration/`) use the real Kafka broker and PostgreSQL from `docker-compose.yml`. **End-to-end tests** (`tests/e2e/`) start the real command-line programs as separate processes.
 - The folders of tests are packages (each has an empty `__init__.py`), which is why a test can write `from tests.unit.application.fakes import ...`. The eight empty `__init__.py` files under `tests/` contain nothing at all; their presence is the whole job.
 
+## Why this repository uses it
 
-## The files
+The lesson's claims (a naive consumer double counts after a crash, the idempotent one does not, a bad record is parked and processing goes on, slow batches get the consumer evicted) are only claims until something checks them. The tests check them at three levels: unit tests with fakes, adapter tests on the real Kafka and PostgreSQL, and end-to-end tests through the command-line programs, including a process that is crashed on purpose.
+
+## Where it appears
 
 | File | What it checks |
 | --- | --- |
@@ -34,7 +37,15 @@ Ideas you need first:
 | `tests/integration/test_kafka_adapters.py` | The Kafka adapters on a real broker. |
 | `tests/e2e/test_lesson_scenarios.py` | The lesson's scenarios through the real programs. |
 
-## `tests/conftest.py`: fixtures
+## How it works underneath
+
+pytest imports every file named `test_*.py`, calls every function named `test_*`, and counts a call that returns as a pass and a call that raises as a failure. It rewrites plain `assert` statements so a failure shows both sides. A **fixture** is a function marked `@pytest.fixture`; pytest looks at a test's parameter names, runs the fixture of each name first and passes the result in; code after a `yield` in a fixture runs as clean-up after the test. `@pytest.mark.parametrize` turns one function into several test cases. **Marks** such as `integration` and `e2e` label tests so they can be selected with `-m`; `--strict-markers` makes an unknown mark an error. A **fake** is a small class with the methods of a port that records calls, which is why unit tests need no broker. Here the `connection` fixture creates the tables, empties them and yields a connection; the `topics` fixture creates two random-named topics and deletes them; the end-to-end tests crash a real consumer process with `os._exit` and compare the balances with an independently computed answer.
+
+## Walkthrough of this repository's use
+
+Every test file is read below, in the order of the table above. Each block is a piece of the real file, copied exactly, followed by an explanation in plain words.
+
+### `tests/conftest.py`: fixtures
 
 ```python
 """Fixtures for the tests that need Kafka and PostgreSQL from docker-compose.yml."""
@@ -96,7 +107,7 @@ def topics(settings: Settings) -> Iterator[tuple[str, str]]:
 - Lines 25 to 32: the `connection` fixture. It opens a database connection in a `with` block and, for every script in the list (`001_schema.sql`, `002_seed.sql`, then every file under `sql/migrations/` in name order), runs the SQL (`db.execute(script.read_text())`). `*sorted(...)` inside the list spreads the sorted file list into it. Then it runs `reset.sql` to empty the tables. `yield db` hands the connection to the test; when the test ends, pytest resumes the function after `yield`, the `with` block closes the connection. The scripts use `IF NOT EXISTS`, so running them every time is safe.
 - Lines 35 to 49: the `topics` fixture. It builds two unique topic names with a random 8-character suffix (`uuid.uuid4().hex[:8]`), creates the payments topic with six partitions and the dead-letter topic with one, `yield`s the pair, and after the test deletes both topics and closes the admin client. Every test gets topics of its own and cannot see another test's records.
 
-## `tests/unit/domain/test_payments.py`
+### `tests/unit/domain/test_payments.py`
 
 ```python
 import json
@@ -219,7 +230,7 @@ def test_payments_are_immutable():
 - Lines 93 to 95: zero poison changes nothing.
 - Lines 98 to 101: payments are immutable; assigning raises `AttributeError`.
 
-## `tests/unit/domain/test_dead_letter_balances_and_crash_plan.py`
+### `tests/unit/domain/test_dead_letter_balances_and_crash_plan.py`
 
 ```python
 import base64
@@ -286,7 +297,7 @@ def test_kill_points_need_at_least_one_run_and_one_payment(runs, payments):
 - Lines 43 to 48: the same inputs give the same output; a tiny topic of 50 payments still gets valid points.
 - Lines 51 to 54: parametrized with two names at once, `(runs, payments)` of `(0, 10)` and `(3, 0)`: both raise `ValueError` mentioning "at least 1".
 
-## `tests/unit/application/fakes.py`
+### `tests/unit/application/fakes.py`
 
 ```python
 """In-memory stand-ins for the application's ports."""
@@ -380,7 +391,7 @@ class FakeClock:
 - Lines 69 to 82: `FakeClock`. `__call__` is the special method that makes an object callable like a function: each reading of the clock adds `step` (1 second) to `now`. `sleep` records the requested seconds and does not wait.
 - None of these classes names the protocol it fits. They have the right methods, which is enough.
 
-## `tests/unit/application/test_produce_payments.py`
+### `tests/unit/application/test_produce_payments.py`
 
 ```python
 import json
@@ -470,7 +481,7 @@ def test_an_invalid_plan_is_rejected(kwargs):
 - Lines 66 to 72: with `stops = iter([False, False, True])` and `stop=lambda: next(stops)`, the run ends after two payloads, flushes once, reports `stopped` and stores no totals.
 - Lines 75 to 78: negative plan values are refused with "invalid produce plan"; `ProducePlan(**kwargs)` unpacks a dictionary into named arguments.
 
-## `tests/unit/application/test_consume_payments.py`
+### `tests/unit/application/test_consume_payments.py`
 
 ```python
 import json
@@ -652,7 +663,7 @@ def test_an_invalid_plan_is_rejected(kwargs):
 - Lines 136 to 149: the loop returns when `stop()` says so; `next(polls)` yields False, False, then True.
 - Lines 152 to 155: three invalid plans are refused with "invalid consume plan".
 
-## `tests/unit/application/test_crash_test_and_health.py`
+### `tests/unit/application/test_crash_test_and_health.py`
 
 ```python
 from decimal import Decimal
@@ -762,7 +773,7 @@ def test_a_report_is_healthy_only_when_every_probe_is():
 - Lines 71 to 73: `check_balances` returns an empty list when the balances match and lists `acct-001` when they differ.
 - Lines 76 to 97: the two health fakes and the health report test, as in the other repositories: healthy only when every probe is, with each probe's name, flag and detail listed.
 
-## `tests/unit/infrastructure/test_settings.py`
+### `tests/unit/infrastructure/test_settings.py`
 
 ```python
 import pytest
@@ -855,7 +866,7 @@ def test_settings_read_the_process_environment_by_default(monkeypatch):
 - Lines 62 to 75: six unusable values (a server list without a port, a blank topic, ports `0` and `five`, an unknown level, a negative timeout) each raise `ConfigurationError` with the variable's name (`match=next(iter(extra))` takes the first key).
 - Lines 78 to 80: `monkeypatch` is a built-in fixture that changes the environment for one test and puts it back; `Settings.from_env()` with no argument reads the real process environment.
 
-## `tests/unit/infrastructure/test_retry.py`
+### `tests/unit/infrastructure/test_retry.py`
 
 ```python
 import random
@@ -954,7 +965,7 @@ def test_at_least_one_attempt_is_required():
 - Lines 70 to 80: `on_retry` is called with attempts 1 and 2.
 - Lines 83 to 85: zero attempts raises `ValueError`.
 
-## `tests/unit/infrastructure/test_logging_and_shutdown.py`
+### `tests/unit/infrastructure/test_logging_and_shutdown.py`
 
 ```python
 import io
@@ -1031,7 +1042,7 @@ def test_sigterm_sets_the_flag_once_installed():
 - Lines 49 to 53: a new `ShutdownSignal` is not set; `request()` sets it.
 - Lines 56 to 65: really sends the process `SIGTERM` with `signal.raise_signal(signal.SIGTERM)` after `install()`, and checks the flag. The `try ... finally` puts the original signal handlers back so other tests are not affected.
 
-## `tests/unit/infrastructure/test_expected_file_and_runner.py`
+### `tests/unit/infrastructure/test_expected_file_and_runner.py`
 
 ```python
 import subprocess
@@ -1083,7 +1094,7 @@ def test_a_crash_run_passes_the_kill_point_and_a_restart_waits_for_idle(tmp_path
 - Lines 17 to 23: `FakeRun` stands in for `subprocess.run`. `__call__` records the command and returns a `CompletedProcess` with exit code 7. `**_: object` accepts and ignores any keyword arguments.
 - Lines 26 to 42: `monkeypatch.setattr(subprocess, "run", fake)` replaces `subprocess.run` for this test only, so no real process starts. The runner is asked for a crash run (`kill_at=731`) and a restart. The test checks: the command starts with the running Python and `-m idempotent_consumer.interfaces.consume_cli`; the crash command has `--kill-at 731` and no `--until-idle`; the restart has `--until-idle 5` and no `--kill-at`; both carry the group and `--commit-every 50`; the exit code 7 is returned; and the log file was created. `crash.index("--kill-at") + 1` finds the position of the word after `--kill-at`.
 
-## `tests/unit/interfaces/test_arguments_and_clis.py`
+### `tests/unit/interfaces/test_arguments_and_clis.py`
 
 ```python
 import argparse
@@ -1139,7 +1150,7 @@ def test_a_missing_database_password_stops_every_program_with_exit_code_two(monk
 - Lines 34 to 36: an unknown `--mode` makes `argparse` exit (`SystemExit`).
 - Lines 39 to 46: with `POSTGRES_PASSWORD` removed (`monkeypatch.delenv(..., raising=False)` means no error if it was not set), each of the five programs returns exit code 2, and the captured standard error (`capsys.readouterr().err`) names the variable.
 
-## `tests/integration/test_postgres_ledger.py`
+### `tests/integration/test_postgres_ledger.py`
 
 These tests need `make up` first (they use the real PostgreSQL).
 
@@ -1224,7 +1235,7 @@ def test_reset_zeroes_the_balances_and_forgets_the_events(connection: psycopg.Co
 - Lines 56 to 61: a payment for an unknown account raises `PoisonMessageError` and leaves **no row** in `processed_events`, because the insert was rolled back together with the failed update.
 - Lines 64 to 68: `reset` zeroes the balance and forgets the events.
 
-## `tests/integration/test_kafka_adapters.py`
+### `tests/integration/test_kafka_adapters.py`
 
 These tests need `make up` first (they use the real broker).
 
@@ -1361,7 +1372,7 @@ def test_the_health_probes_pass_against_the_running_services(settings: Settings,
 - Lines 91 to 110: **dead letters**. `sink.send(...)` returns only after the broker acknowledged. A plain consumer with `consumer_timeout_ms=10_000` (stop iterating after 10 quiet seconds) then reads the dead-letter topic; there is exactly one letter and it carries the original topic, partition 3 and offset 5512. The last assertion line (`TopicPartition(...) is not None`) is always true and only makes use of the import.
 - Lines 113 to 116: the two health probes pass against the running services; `assert report.healthy, report` prints the report if the assertion fails.
 
-## `tests/e2e/test_lesson_scenarios.py`
+### `tests/e2e/test_lesson_scenarios.py`
 
 ```python
 """The lesson's scenarios through the command-line programs, as the Makefile runs them.
@@ -1536,3 +1547,14 @@ Break something on purpose: in `src/idempotent_consumer/domain/payments.py` chan
 1. What makes pytest treat a function as a test? (A name starting with `test_` in a file whose name starts with `test_`.)
 2. What does a fixture with `yield` do after the test finishes? (Runs the code after the `yield`: the clean-up.)
 3. Why does the idempotent end-to-end test expect `'duplicate': 1`? (The kill happens after the database commit and before the offset commit, so exactly the record in flight is delivered again.)
+4. Why do the tests use the made-up password `s3cret-value`? (A made-up value keeps any real password out of the repository; the tests only need some text to check the rules.)
+5. What does `tmp_path` give a test? (A fresh empty folder for that test, deleted later.)
+
+## Further reading
+
+- pytest: fixtures: https://docs.pytest.org/en/stable/how-to/fixtures.html
+- pytest: parametrize: https://docs.pytest.org/en/stable/how-to/parametrize.html
+- pytest: monkeypatch: https://docs.pytest.org/en/stable/how-to/monkeypatch.html
+- pytest: capturing output (`capsys`): https://docs.pytest.org/en/stable/how-to/capture-stdout-stderr.html
+- pytest: marks: https://docs.pytest.org/en/stable/how-to/mark.html
+- pytest: `tmp_path`: https://docs.pytest.org/en/stable/how-to/tmp_path.html

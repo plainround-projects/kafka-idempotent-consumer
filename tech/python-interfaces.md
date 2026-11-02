@@ -1,6 +1,6 @@
 # Python: the interfaces layer, file by file
 
-## What this note covers
+## What it is
 
 The folder `src/idempotent_consumer/interfaces/` holds the **command-line programs**: the things you can start from a terminal. Each one reads its arguments, builds the real adapters, hands them to a use case, prints a result, and decides the **exit code**. They are the outermost layer: they may import everything below them, and nothing may import them.
 
@@ -10,7 +10,11 @@ Words you need first:
 - A **process** is a running program. When it ends it hands the operating system a number called its **exit code**. By convention `0` means success and any other number means a problem. The shell, `make` and CI read that number to decide what to do next. This repository uses `0` for success, `1` for "ran but found a problem" (unhealthy, a mismatch, a failed crash run), and `2` for "refused to start because the configuration is wrong".
 - **Standard output** (stdout) and **standard error** (stderr) are the two text streams every process has. This repository prints results to stdout and log lines to stderr, so results can be saved to a file without the logs mixed in.
 
-## The files
+## Why this repository uses it
+
+A reader needs commands to type: produce payments, run the balance updater (naive or idempotent, with a crash switch), check the balances, run the crash test, check health. The programs are the only place where the real adapters are chosen and joined to the use cases, where arguments are read, and where exit codes are decided.
+
+## Where it appears
 
 | File | Program it defines |
 | --- | --- |
@@ -23,7 +27,15 @@ Words you need first:
 | `check_cli.py` | Compares the balances with the expected totals. |
 | `health_cli.py` | The health check: exit 0 when healthy. |
 
-## `interfaces/__init__.py`
+## How it works underneath
+
+`python -m package.module` finds the module by its dotted name and runs it with the special variable `__name__` set to `"__main__"`; the closing `if __name__ == "__main__":` block then calls `main()`. `argparse` builds a parser from the `add_argument` calls, reads the words typed after the command (`sys.argv`), converts each with its `type` function and fills a namespace; a bad argument prints a usage message and exits with code 2. `main` returns a whole number and `raise SystemExit(code)` hands it to the operating system as the process's **exit code**, which the shell, `make` and CI read. These files are the **composition root**: the one place that builds the real adapters and passes them to the use cases. Here the consumer program picks the naive or the idempotent ledger from `--mode`, plugs in the kill switch with `--kill-at`, and the crash test program starts that consumer as a separate process through the subprocess runner.
+
+## Walkthrough of this repository's use
+
+Every source file of this layer is read below, in the order of the table above. Each block is a piece of the real file, copied exactly, followed by an explanation in plain words.
+
+### `interfaces/__init__.py`
 
 ```python
 """Command-line entry points. They wire adapters into use cases and own exit codes."""
@@ -31,7 +43,7 @@ Words you need first:
 
 Only a docstring; the folder becomes a package, and the sentence states the layer's job.
 
-## `arguments.py`: checking numbers typed on the command line
+### `arguments.py`: checking numbers typed on the command line
 
 ```python
 """Argument validation shared by the command-line programs."""
@@ -73,7 +85,7 @@ def non_negative_float(text: str) -> float:
 
 Together they mean `--orders -5` is refused with a clear message before any Kafka client is created.
 
-## `common.py`: the start-up all programs share
+### `common.py`: the start-up all programs share
 
 ```python
 """Startup shared by the programs: settings or a clear exit code 2."""
@@ -101,7 +113,7 @@ def load_settings() -> Settings | None:
 - Lines 13 to 17: `Settings.from_env()` reads and checks the environment. On `ConfigurationError` the message goes to stderr (`file=sys.stderr`) and the function returns `None`; each program then returns exit code 2. Because the error message names the variable (and never prints the password), the user sees what to fix.
 - Lines 18 and 19: otherwise logging is set up at the configured level and the settings are returned.
 
-## `produce_cli.py`: the producer program
+### `produce_cli.py`: the producer program
 
 ```python
 """Publish payments (and, on request, malformed events) to the `payments` topic.
@@ -200,7 +212,7 @@ if __name__ == "__main__":
 
 `__name__` is a special variable. When a file is started as a program (`python -m ...`) its value is `"__main__"`; when another file merely imports it, it is the module's name. So these two lines run `main()` only when the file is started as a program, never when a test imports it. `SystemExit(code)` ends the process with that exit code.
 
-## `consume_cli.py`: the balance updater
+### `consume_cli.py`: the balance updater
 
 ```python
 """The balance updater: reads payments and keeps the `balances` table up to date.
@@ -335,7 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 - Lines 98 to 101: `finally` closes the consumer (leaves the group), the dead-letter producer and the database connection, whether the run finished, failed or was stopped by a signal.
 - Line 102: prints `[name] done: {...}` with the four counters. Line 103: return 0.
 
-## `crash_test_cli.py`: the lesson's crash test
+### `crash_test_cli.py`: the lesson's crash test
 
 ```python
 """Lesson step 3: crash the idempotent consumer at many points and check the balances after each.
@@ -419,7 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 - Lines 56 to 67: `with postgres.connect(settings.postgres) as connection:` opens the database connection and closes it at the end of the block. The use case gets the real process runner (which writes `logs/crash-test.log`), the admin and reader that share the connection, the expected totals, and the options. `group_for_run=lambda number: f"crash-test-{stamp}-{number}"` is a nameless function that makes each run's group name.
 - Line 68: `0 if all(run.passed for run in results) else 1`: exit 0 only if every run passed.
 
-## `check_cli.py`: compare the balances with the answer
+### `check_cli.py`: compare the balances with the answer
 
 ```python
 """Compare the balances table with expected_totals.json. Exit code 1 on any mismatch."""
@@ -465,7 +477,7 @@ if __name__ == "__main__":
 - Lines 25 and 26: connect and ask the use case for mismatches. Lines 27 and 28: print each one (using `Mismatch.__str__`).
 - Lines 29 to 32: exit 1 if there was any mismatch; otherwise print `all 50 balances match expected totals exactly` and return 0. The number printed is `len(expected)`, the number of accounts.
 
-## `health_cli.py`: the health check
+### `health_cli.py`: the health check
 
 ```python
 """Health command: exit 0 when Kafka has the topics and PostgreSQL has the balances table.
@@ -528,3 +540,13 @@ Expected: `configuration error: BOOTSTRAP_SERVERS must be host:port[,host:port],
 1. What are the exit codes here? (0 success, 1 a problem found, 2 a configuration or argument error.)
 2. What does `os._exit(1)` skip that `sys.exit(1)` does not? (`finally` blocks and cleanup, including the offset commit and leaving the group.)
 3. Why is the consumer passed twice to `consume_payments`? (One object plays two roles: source and committer.)
+4. What does `--kill-at 100` do? (After the database commit of the 100th record, and before its offset commit, the process stops at once with `os._exit(1)`.)
+5. What exit code does `check_cli` return when a balance is wrong? (1 (and 0 when every balance matches).)
+
+## Further reading
+
+- Python 3.12 `argparse`: https://docs.python.org/3.12/library/argparse.html
+- Python 3.12 `__main__` and `python -m`: https://docs.python.org/3.12/library/__main__.html
+- Python 3.12 `sys` (`exit`, `stderr`): https://docs.python.org/3.12/library/sys.html
+- Python 3.12 `time`: https://docs.python.org/3.12/library/time.html
+- Python 3.12 `os._exit`: https://docs.python.org/3.12/library/os.html#os._exit
