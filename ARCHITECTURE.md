@@ -41,7 +41,7 @@ flowchart LR
     end
     producer -- "payments" --> topic
     topic -- "poll" --> updater
-    updater -- "commit offset (after the DB commit)" --> topic
+    updater -- "commit offset (after the DB commit)" --> gc
     updater -- "1. insert eventId" --> seen
     updater -- "2. add amount (same transaction)" --> balances
     updater -- "bad record + error" --> dlt
