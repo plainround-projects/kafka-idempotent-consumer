@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="t d">
+<title id="t">One make run of the idempotent consumer</title>
+<desc id="d">Nine rows top to bottom across five lanes. make data sends 10,000 payments and make migrate creates processed_events. The updater joins the group, polls up to 500 records and applies each payment in one PostgreSQL transaction, then commits the offset. In the amber row a crash replays an event and the insert conflicts, so nothing is added twice. A bad record goes to the dead-letter topic. The run ends with all 50 balances matching.</desc>
+<style>
+:root{--paper:#ffffff;--ink:#10243d;--mute:#52677f;--accent:#0a6aa8;--good:#19743f;--warn:#8a5a00}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;fill:var(--ink)}
+.title{font-family:Georgia,'Iowan Old Style','Times New Roman',serif;font-size:36px}
+.caption{font-size:16px;fill:var(--mute)}
+.name{font-size:20px;font-weight:600}
+.lane{font-size:17px;font-weight:600}
+.sub{font-size:15px;fill:var(--mute)}
+.label{font-size:15px}
+.tag{font-size:15px;fill:var(--mute)}
+.num{font-size:15px;font-weight:700;fill:var(--paper)}
+.legend{font-size:14px;fill:var(--mute)}
+.t-accent{fill:var(--accent)}
+.t-good{fill:var(--good)}
+.t-warn{fill:var(--warn)}
+.t-ink{fill:var(--ink)}
+.b{font-weight:600}
+.paper{fill:var(--paper);stroke:var(--mute);stroke-opacity:.3}
+.grid{fill:url(#grid)}
+.boundary{fill:var(--mute);fill-opacity:.035;stroke:var(--mute);stroke-opacity:.7;stroke-dasharray:6 5}
+.svc{fill:var(--accent);fill-opacity:.08;stroke:var(--accent);stroke-width:1.25}
+.store{fill:var(--mute);fill-opacity:.1;stroke:var(--mute);stroke-width:1.25}
+.rim{fill:none;stroke:var(--mute);stroke-width:1.25}
+.actor{fill:none;stroke:var(--mute);stroke-width:1.25}
+.slot{fill:var(--accent);fill-opacity:.14;stroke:var(--accent);stroke-width:1}
+.note{fill:var(--warn);fill-opacity:.09;stroke:var(--warn);stroke-width:1}
+.win{fill:var(--good);fill-opacity:.09;stroke:var(--good);stroke-width:1}
+.hair{fill:none;stroke:var(--mute);stroke-opacity:.4;stroke-width:1}
+.zone{fill:var(--accent);fill-opacity:.045;stroke:var(--accent);stroke-width:1.25;stroke-dasharray:6 5}
+.stop{fill:none;stroke:var(--warn);stroke-width:4;stroke-linecap:round}
+.mask{fill:var(--paper)}
+.sync,.async,.read,.fail,.ok{fill:none}
+.sync{stroke:var(--accent);stroke-width:1.75;marker-end:url(#a-sync)}
+.async{stroke:var(--accent);stroke-width:1.75;stroke-dasharray:8 6;marker-end:url(#a-async)}
+.read{stroke:var(--mute);stroke-width:1.75;stroke-linecap:round;stroke-dasharray:1 6;marker-end:url(#a-read)}
+.fail{stroke:var(--warn);stroke-width:2;marker-end:url(#a-fail)}
+.ok{stroke:var(--good);stroke-width:1.75;marker-end:url(#a-ok)}
+.dot{fill:var(--accent)}
+.dot-w{fill:var(--warn)}
+.dot-g{fill:var(--good)}
+.head-sync,.head-async{stroke:var(--accent)}
+.head-sync{fill:var(--accent)}
+.head-async,.head-read{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.head-read{stroke:var(--mute)}
+.head-fail{fill:var(--warn)}
+.head-ok{fill:var(--good)}
+.gridline{fill:none;stroke:var(--mute);stroke-opacity:.09}
+</style>
+<defs>
+<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path class="gridline" d="M40 0H0V40"/></pattern>
+<marker id="a-sync" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-sync" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-async" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-async" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-read" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-fail" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-ok" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="paper" x="0.5" y="0.5" width="1199" height="859" rx="16"/>
+<rect class="grid" x="1" y="1" width="1198" height="858" rx="16"/>
+<text class="title" x="48" y="68">Apply once, commit last</text>
+<text class="caption" x="48" y="100">make run. Amber: a crash replays the event; the guard makes the replay harmless.</text>
+<rect class="svc" x="398" y="128" width="140" height="48" rx="10"/>
+<text class="lane" x="468" y="148" text-anchor="middle">Group</text>
+<text class="lane" x="468" y="168" text-anchor="middle">coordinator</text>
+<rect class="svc" x="555" y="128" width="130" height="48" rx="10"/>
+<text class="lane" x="620" y="158" text-anchor="middle">payments</text>
+<rect class="svc" x="708" y="128" width="140" height="48" rx="10"/>
+<text class="lane" x="778" y="148" text-anchor="middle">Balance</text>
+<text class="lane" x="778" y="168" text-anchor="middle">updater</text>
+<rect class="svc" x="865" y="128" width="130" height="48" rx="10"/>
+<text class="lane" x="930" y="158" text-anchor="middle">PostgreSQL</text>
+<rect class="svc" x="1007" y="128" width="142" height="48" rx="10"/>
+<text class="lane" x="1078" y="148" text-anchor="middle">Dead-letter</text>
+<text class="lane" x="1078" y="168" text-anchor="middle">topic</text>
+<path class="hair" d="M468 176V612M620 176V548M778 176V740M930 176V484M1078 176V676"/>
+<path class="hair" d="M66 216V728"/>
+<circle class="dot" cx="66" cy="216" r="15"/><text class="num" x="66" y="221" text-anchor="middle">1</text>
+<text class="label b t-ink" x="96" y="212">make data: Producer sends</text>
+<text class="sub" x="96" y="232">keyed by accountId</text>
+<rect class="slot" x="614" y="198" width="12" height="36" rx="4"/>
+<text class="label t-accent" x="636" y="221">10,000 sent</text>
+<circle class="dot" cx="66" cy="280" r="15"/><text class="num" x="66" y="285" text-anchor="middle">2</text>
+<text class="label b t-ink" x="96" y="276">make migrate adds the guard</text>
+<text class="sub" x="96" y="296">processed_events table</text>
+<rect class="slot" x="924" y="262" width="12" height="36" rx="4"/>
+<text class="label t-accent" x="946" y="285">create table</text>
+<circle class="dot" cx="66" cy="344" r="15"/><text class="num" x="66" y="349" text-anchor="middle">3</text>
+<text class="label b t-ink" x="96" y="340">The updater joins the group</text>
+<text class="sub" x="96" y="360">all six partitions assigned</text>
+<path class="sync" d="M778 344H468"/>
+<text class="label t-accent" x="484" y="334">join group</text>
+<circle class="dot" cx="66" cy="408" r="15"/><text class="num" x="66" y="413" text-anchor="middle">4</text>
+<text class="label b t-ink" x="96" y="404">It polls up to 500 records</text>
+<text class="sub" x="96" y="424">then validates each one</text>
+<path class="read" d="M620 408H778"/>
+<text class="label" x="636" y="398">poll 500</text>
+<circle class="dot" cx="66" cy="472" r="15"/><text class="num" x="66" y="477" text-anchor="middle">5</text>
+<text class="label b t-ink" x="96" y="468">One transaction per payment</text>
+<text class="sub" x="96" y="488">insert event id, add amount</text>
+<path class="sync" d="M778 472H930"/>
+<text class="label t-accent" x="794" y="462">INSERT, UPDATE</text>
+<circle class="dot-w" cx="66" cy="536" r="15"/><text class="num" x="66" y="541" text-anchor="middle">5x</text>
+<text class="label b t-warn" x="96" y="532">A crash replays the event</text>
+<text class="sub" x="96" y="552">INSERT conflicts: no UPDATE</text>
+<path class="fail" d="M620 536H778"/>
+<text class="label t-warn" x="636" y="526">redelivered</text>
+<circle class="dot" cx="66" cy="600" r="15"/><text class="num" x="66" y="605" text-anchor="middle">6</text>
+<text class="label b t-ink" x="96" y="596">The offset commits last</text>
+<text class="sub" x="96" y="616">record.offset + 1</text>
+<path class="sync" d="M778 600H468"/>
+<text class="label t-accent" x="484" y="590">commit offset</text>
+<circle class="dot" cx="66" cy="664" r="15"/><text class="num" x="66" y="669" text-anchor="middle">7</text>
+<text class="label b t-ink" x="96" y="660">A bad record is parked</text>
+<text class="sub" x="96" y="680">dead-letter first, then commit</text>
+<path class="async" d="M778 664H1078"/>
+<text class="label t-accent" x="946" y="654">bad record</text>
+<circle class="dot-g" cx="66" cy="728" r="15"/><text class="num" x="66" y="733" text-anchor="middle">8</text>
+<text class="label b t-ink" x="96" y="724">The checker compares</text>
+<text class="sub" x="96" y="744">50 balances, expected totals</text>
+<rect class="slot" x="772" y="710" width="12" height="36" rx="4"/>
+<path class="ok" d="M790 728H840"/>
+<rect class="win" x="840" y="708" width="265" height="40" rx="10"/>
+<text class="label b t-good" x="856" y="733">all 50 balances match</text>
+<path class="sync" d="M48 816H112"/><text class="legend" x="124" y="821">sync call</text>
+<path class="async" d="M264 816H328"/><text class="legend" x="340" y="821">async message</text>
+<path class="fail" d="M696 816H760"/><text class="legend" x="772" y="821">failure path</text>
+<path class="ok" d="M928 816H992"/><text class="legend" x="1004" y="821">result</text>
+</svg>

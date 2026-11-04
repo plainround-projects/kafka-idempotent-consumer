@@ -10,6 +10,24 @@ A consumer that reads payment events from Kafka and keeps an account-balance tab
 | **Architecture** | [ARCHITECTURE.md](ARCHITECTURE.md), runbook: [docs/RUNBOOK.md](docs/RUNBOOK.md), decisions: [docs/adr](docs/adr) |
 | **Technology notes** | [tech/README.md](tech/README.md): one file per technology used here, written for a reader who knows none of them |
 
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img alt="A producer sends 10,000 payments to the topic payments and writes expected_totals.json; the balance updater applies each payment in one PostgreSQL transaction that inserts the event id into processed_events and adds the amount to balances, commits the offset to the group coordinator afterwards, and parks bad records in payments-dlq." src="docs/diagrams/architecture.svg">
+</picture>
+
+The event id and the balance change share one transaction, and the offset commits last; the amber notes are the crash and eviction demos.
+
+## How one run flows
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/flow-dark.svg">
+  <img alt="One make run of the consumer: the producer fills payments, the guard table is created, the updater applies each payment in a transaction and commits the offset last, and in the amber row a crash replays an event whose insert then conflicts and changes nothing." src="docs/diagrams/flow.svg">
+</picture>
+
+The run ends with all 50 balances matching; the amber row shows why a replay after a crash cannot add a payment twice.
+
 ## Prerequisites
 
 | Tool | Version | Used for |

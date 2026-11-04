@@ -24,6 +24,8 @@ The consume loop (apply, commit after, dead-letter poison, survive an eviction) 
 
 ## Data flow
 
+Drawn versions of this figure and of the walk-through: [the architecture](docs/diagrams/architecture.svg) and [one run](docs/diagrams/flow.svg).
+
 ```mermaid
 flowchart LR
     producer["Producer<br/>10,000 payments"]

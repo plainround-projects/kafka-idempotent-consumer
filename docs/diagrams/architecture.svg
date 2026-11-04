@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="t d">
+<title id="t">Architecture of the idempotent balance consumer</title>
+<desc id="d">A producer sends 10,000 payments, keyed by account, to the topic payments in a one-broker Kafka cluster and writes expected_totals.json. The balance updater polls payments, and for each payment runs one PostgreSQL transaction that inserts the event id into processed_events and adds the amount to balances. It commits the offset to the group coordinator only afterwards, and sends a bad record to the dead-letter topic payments-dlq. A checker compares balances with expected_totals.json. Two amber notes show the crash and the eviction demos.</desc>
+<style>
+:root{--paper:#ffffff;--ink:#10243d;--mute:#52677f;--accent:#0a6aa8;--good:#19743f;--warn:#8a5a00}
+text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;fill:var(--ink)}
+.title{font-family:Georgia,'Iowan Old Style','Times New Roman',serif;font-size:36px}
+.caption{font-size:16px;fill:var(--mute)}
+.name{font-size:20px;font-weight:600}
+.lane{font-size:17px;font-weight:600}
+.sub{font-size:15px;fill:var(--mute)}
+.label{font-size:15px}
+.tag{font-size:15px;fill:var(--mute)}
+.num{font-size:15px;font-weight:700;fill:var(--paper)}
+.legend{font-size:14px;fill:var(--mute)}
+.t-accent{fill:var(--accent)}
+.t-good{fill:var(--good)}
+.t-warn{fill:var(--warn)}
+.t-ink{fill:var(--ink)}
+.b{font-weight:600}
+.paper{fill:var(--paper);stroke:var(--mute);stroke-opacity:.3}
+.grid{fill:url(#grid)}
+.boundary{fill:var(--mute);fill-opacity:.035;stroke:var(--mute);stroke-opacity:.7;stroke-dasharray:6 5}
+.svc{fill:var(--accent);fill-opacity:.08;stroke:var(--accent);stroke-width:1.25}
+.store{fill:var(--mute);fill-opacity:.1;stroke:var(--mute);stroke-width:1.25}
+.rim{fill:none;stroke:var(--mute);stroke-width:1.25}
+.actor{fill:none;stroke:var(--mute);stroke-width:1.25}
+.slot{fill:var(--accent);fill-opacity:.14;stroke:var(--accent);stroke-width:1}
+.note{fill:var(--warn);fill-opacity:.09;stroke:var(--warn);stroke-width:1}
+.win{fill:var(--good);fill-opacity:.09;stroke:var(--good);stroke-width:1}
+.hair{fill:none;stroke:var(--mute);stroke-opacity:.4;stroke-width:1}
+.zone{fill:var(--accent);fill-opacity:.045;stroke:var(--accent);stroke-width:1.25;stroke-dasharray:6 5}
+.stop{fill:none;stroke:var(--warn);stroke-width:4;stroke-linecap:round}
+.mask{fill:var(--paper)}
+.sync,.async,.read,.fail,.ok{fill:none}
+.sync{stroke:var(--accent);stroke-width:1.75;marker-end:url(#a-sync)}
+.async{stroke:var(--accent);stroke-width:1.75;stroke-dasharray:8 6;marker-end:url(#a-async)}
+.read{stroke:var(--mute);stroke-width:1.75;stroke-linecap:round;stroke-dasharray:1 6;marker-end:url(#a-read)}
+.fail{stroke:var(--warn);stroke-width:2;marker-end:url(#a-fail)}
+.ok{stroke:var(--good);stroke-width:1.75;marker-end:url(#a-ok)}
+.dot{fill:var(--accent)}
+.dot-w{fill:var(--warn)}
+.dot-g{fill:var(--good)}
+.head-sync,.head-async{stroke:var(--accent)}
+.head-sync{fill:var(--accent)}
+.head-async,.head-read{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.head-read{stroke:var(--mute)}
+.head-fail{fill:var(--warn)}
+.head-ok{fill:var(--good)}
+.gridline{fill:none;stroke:var(--mute);stroke-opacity:.09}
+</style>
+<defs>
+<pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path class="gridline" d="M40 0H0V40"/></pattern>
+<marker id="a-sync" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-sync" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-async" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-async" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-read" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-read" d="M1 1L9 5L1 9"/></marker>
+<marker id="a-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-fail" d="M0 0L10 5L0 10z"/></marker>
+<marker id="a-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="head-ok" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<rect class="paper" x="0.5" y="0.5" width="1199" height="859" rx="16"/>
+<rect class="grid" x="1" y="1" width="1198" height="858" rx="16"/>
+<text class="title" x="48" y="68">Apply once, even when Kafka repeats</text>
+<text class="caption" x="48" y="100">The event id and the balance change share one transaction. Amber: the two demos that attack it.</text>
+<rect class="svc" x="48" y="132" width="300" height="96" rx="12"/>
+<text class="name" x="64" y="164">Producer</text>
+<text class="sub" x="64" y="188">10,000 payments</text>
+<text class="sub" x="64" y="210">keyed by accountId</text>
+<path class="store" d="M504 144a132 12 0 0 1 264 0v102a132 12 0 0 1 -264 0z"/>
+<path class="rim" d="M504 144a132 12 0 0 0 264 0"/>
+<text class="name" x="636" y="176" text-anchor="middle">Expected totals</text>
+<text class="sub" x="636" y="198" text-anchor="middle">expected_totals.json</text>
+<text class="sub" x="636" y="220" text-anchor="middle">from the events alone</text>
+<rect class="svc" x="880" y="132" width="272" height="96" rx="12"/>
+<text class="name" x="896" y="164">Checker</text>
+<text class="sub" x="896" y="188">balances against</text>
+<text class="sub" x="896" y="210">expected totals</text>
+<rect class="boundary" x="48" y="252" width="352" height="432" rx="14"/>
+<text class="tag" x="116" y="280">Kafka cluster: one broker</text>
+<rect class="svc" x="72" y="308" width="304" height="120" rx="12"/>
+<text class="name" x="88" y="340">payments</text>
+<text class="sub" x="88" y="364">6 partitions, key accountId</text>
+<rect class="slot" x="88" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="107" y="399" text-anchor="middle">0</text>
+<rect class="slot" x="132" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="151" y="399" text-anchor="middle">1</text>
+<rect class="slot" x="176" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="195" y="399" text-anchor="middle">2</text>
+<rect class="slot" x="220" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="239" y="399" text-anchor="middle">3</text>
+<rect class="slot" x="264" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="283" y="399" text-anchor="middle">4</text>
+<rect class="slot" x="308" y="376" width="38" height="36" rx="5"/>
+<text class="label t-accent" x="327" y="399" text-anchor="middle">5</text>
+<rect class="svc" x="72" y="448" width="304" height="84" rx="12"/>
+<text class="name" x="88" y="480">payments-dlq</text>
+<text class="sub" x="88" y="504">1 partition, 30 days</text>
+<rect class="svc" x="72" y="552" width="304" height="84" rx="12"/>
+<text class="name" x="88" y="584">Group coordinator</text>
+<text class="sub" x="88" y="608">a broker: offsets, heartbeats</text>
+<rect class="svc" x="504" y="308" width="264" height="332" rx="12"/>
+<text class="name" x="520" y="340">Balance updater</text>
+<text class="sub" x="520" y="364">group balance-updater</text>
+<text class="sub" x="520" y="386">validates each payment</text>
+<text class="sub" x="520" y="408">one DB transaction each</text>
+<text class="sub" x="520" y="430">commits offset after it</text>
+<text class="sub" x="520" y="452">bad record to the DLQ</text>
+<rect class="boundary" x="880" y="252" width="272" height="388" rx="14"/>
+<text class="tag" x="896" y="280">PostgreSQL</text>
+<path class="store" d="M904 328a112 12 0 0 1 224 0v102a112 12 0 0 1 -224 0z"/>
+<path class="rim" d="M904 328a112 12 0 0 0 224 0"/>
+<text class="name" x="1016" y="360" text-anchor="middle">balances</text>
+<text class="sub" x="1016" y="382" text-anchor="middle">total numeric(14,2)</text>
+<text class="sub" x="1016" y="404" text-anchor="middle">one row per account</text>
+<path class="store" d="M904 502a112 12 0 0 1 224 0v102a112 12 0 0 1 -224 0z"/>
+<path class="rim" d="M904 502a112 12 0 0 0 224 0"/>
+<text class="name" x="1016" y="534" text-anchor="middle">Processed events</text>
+<text class="sub" x="1016" y="556" text-anchor="middle">processed_events</text>
+<text class="sub" x="1016" y="578" text-anchor="middle">event id: the guard</text>
+<rect class="note" x="504" y="676" width="340" height="100" rx="10"/>
+<text class="label b t-warn" x="520" y="706">make demo-evict</text>
+<text class="sub" x="520" y="732">slow batches: poll timeout,</text>
+<text class="sub" x="520" y="754">EVICTED, offset commit rejected</text>
+<rect class="note" x="880" y="676" width="272" height="124" rx="10"/>
+<text class="label b t-warn" x="896" y="706">make demo-crash</text>
+<text class="sub" x="896" y="732">naive: crash before the</text>
+<text class="sub" x="896" y="754">offset commit: one account</text>
+<text class="sub" x="896" y="776">high by 332.04</text>
+<path class="async" d="M100 228V308"/>
+<text class="label t-accent" x="112" y="244">payments</text>
+<path class="sync" d="M348 180H504"/>
+<text class="label t-accent" x="360" y="170">writes</text>
+<path class="read" d="M376 340H504"/>
+<text class="label" x="412" y="330">poll</text>
+<path class="async" d="M504 500H376"/>
+<text class="label t-accent" x="412" y="490">bad record</text>
+<path class="sync" d="M504 600H376"/>
+<text class="label t-accent" x="412" y="590">commit</text>
+<text class="label t-accent" x="412" y="622">heartbeat</text>
+<path class="sync" d="M768 370H904"/>
+<text class="label t-accent" x="780" y="360">2. UPDATE</text>
+<path class="sync" d="M768 560H904"/>
+<text class="label t-accent" x="780" y="550">1. INSERT</text>
+<path class="read" d="M768 180H880"/>
+<text class="label" x="780" y="170">compare</text>
+<path class="read" d="M1016 316V228"/>
+<text class="label" x="1028" y="292">totals</text>
+<path class="sync" d="M48 816H112"/><text class="legend" x="124" y="821">sync call</text>
+<path class="async" d="M264 816H328"/><text class="legend" x="340" y="821">async message</text>
+<path class="read" d="M520 816H584"/><text class="legend" x="596" y="821">read</text>
+</svg>
